@@ -11467,10 +11467,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if !pw.sourceIdentityUnverified {
 		remote = e.toolLinkRemote(candidate.Session, pw.sess.GitRemote)
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, candidate.Messages, candidate.Session.Cwd, remote)
-	if err != nil {
-		return preparedSessionWrite{}, sessionWritePreserved, err
-	}
 	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
@@ -11483,17 +11479,15 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	if forkState != nil {
-		toolLinks, err = db.ToolCallPRLinks(ctx, candidate.Messages, candidate.Session.Cwd, remote)
-		if err != nil {
-			return preparedSessionWrite{}, sessionWritePreserved, err
-		}
+	toolLinks, err := db.ToolCallPRLinks(ctx, candidate.Messages, candidate.Session.Cwd, remote)
+	if err != nil {
+		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	if err := ctx.Err(); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	if history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory {
+	if e.db.ArchiveContent().OmitsToolContent() && (history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory) {
 		reader := toolPRLinksReader(e.db)
 		if archived, ok := e.archiveStore.(toolPRLinksReader); ok {
 			reader = archived

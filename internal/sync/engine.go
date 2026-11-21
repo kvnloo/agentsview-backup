@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,6 +31,10 @@ import (
 	"go.kenn.io/agentsview/internal/sync/failurecache"
 	"go.kenn.io/kit/atomicfile"
 )
+
+type toolPRLinksReader interface {
+	GetSessionToolPRLinks(context.Context, string) ([]db.PRLink, error)
+}
 
 const (
 	batchSize               = 100
@@ -11306,7 +11311,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		// column, and source-missing state is cleared only after this
 		// succeeds, so an old current version cannot hide a failed rewrite.
 		if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
-			s.ID, dataVersionForWrite(pw), s.ToolPRLinks, replaceMessages && !prepared.keepToolPRLinks,
+			s.ID, dataVersionForWrite(pw), s.ToolPRLinks,
 		); err != nil {
 			if ctx.Err() != nil {
 				return outcome
@@ -11479,6 +11484,17 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err := ctx.Err(); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
+	if history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory {
+		reader := toolPRLinksReader(e.db)
+		if archived, ok := e.archiveStore.(toolPRLinksReader); ok {
+			reader = archived
+		}
+		stored, err := reader.GetSessionToolPRLinks(ctx, candidate.Session.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return preparedSessionWrite{}, sessionWritePreserved, err
+		}
+		toolLinks = parser.CombinePRLinks(toolLinks, stored)
+	}
 	candidate.Session.ToolPRLinks = toolLinks
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
@@ -11489,7 +11505,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys, keepToolPRLinks: history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory}
+	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
 	if forkState != nil {
 		// Totals describe the sanitized message and independent event rows that
 		// will be committed. Session-summary events are not additive usage.
@@ -12022,7 +12038,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				continue
 			}
 			if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
-				s.ID, dataVersionForWrite(pw), s.ToolPRLinks, !prepared.keepToolPRLinks,
+				s.ID, dataVersionForWrite(pw), s.ToolPRLinks,
 			); err != nil {
 				log.Printf(
 					"set data_version for %s: %v", s.ID, err,
@@ -12103,7 +12119,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			SkipSignalUpdates:       e.disableSignalRecompute,
 			DataVersion:             dataVersionForWrite(pw),
 			ReplaceMessages:         replaceMessages,
-			PreserveToolPRLinks:     prepared.keepToolPRLinks,
 			Checkpoint:              checkpoint,
 			CheckpointBlobs:         checkpointBlobs,
 			ClaudeSubagentSources:   claudeSources,
@@ -12393,7 +12408,7 @@ func (e *Engine) writeSessionFullWithResolver(
 	// See writeBatch for why data_version is bumped here
 	// rather than inside UpsertSession.
 	if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
-		s.ID, dataVersionForWrite(pw), s.ToolPRLinks, !prepared.keepToolPRLinks,
+		s.ID, dataVersionForWrite(pw), s.ToolPRLinks,
 	); err != nil {
 		log.Printf(
 			"set data_version for %s: %v", s.ID, err,

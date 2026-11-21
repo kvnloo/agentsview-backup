@@ -679,6 +679,7 @@ Sessions list pull requests found in retained user prompts, supported `gh pr` co
 ```
 
 AgentsView keeps one link per pull request. Commands count even when they did not run.
+Commands over 256 KiB are skipped when extracting links.
 After `cd`, or with a workdir other than the session directory, a bare number needs `-R`
 or a URL. After `eval` or `source`, use a host-qualified `-R` or a URL. Archives
 from before data version 185 recover explicit links and bare numbers when the source

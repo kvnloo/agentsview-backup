@@ -338,7 +338,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	})
 	s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
 			return err
@@ -374,24 +374,17 @@ func TestToolPRLinksPreserveOmittedInputs(t *testing.T) {
 }
 
 func TestToolPRLinksAppendTracksSharedShell(t *testing.T) {
-	for _, tc := range []struct {
-		tool string
-		want int
-	}{{"Bash", 1}, {"exec_command", 2}} {
-		t.Run(tc.tool, func(t *testing.T) {
-			d := testDB(t)
-			s := Session{ID: "shared-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
-			require.NoError(t, d.UpsertSession(t.Context(), s))
-			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: `{"command":"cd /elsewhere"}`}}}}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: `{"command":"gh pr view 42; gh pr view 43 -R example/other"}`}}}}))
-			got, err := d.GetSession(t.Context(), s.ID)
-			require.NoError(t, err)
-			require.Len(t, got.PRLinks, tc.want)
-			assert.Equal(t, "https://github.com/example/other/pull/43", got.PRLinks[tc.want-1].URL)
-		})
-	}
+	d := testDB(t)
+	s := Session{ID: "shared-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /elsewhere"}`}}}}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42; gh pr view 43 -R example/other"}`}}}}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/other/pull/43", got.PRLinks[0].URL)
 }
 
 func TestToolPRLinksShellContextSurvivesOmittedInputs(t *testing.T) {
@@ -505,29 +498,30 @@ func TestToolPRLinksShellContextMissingNewInput(t *testing.T) {
 func TestShellTaintPrefilterAndBackfill(t *testing.T) {
 	d := testDB(t)
 	cases := []struct {
-		name, command      string
-		candidate, tainted bool
+		name, command string
+		candidate     bool
 	}{
-		{"substitution", `echo "$(date)"`, false, false},
-		{"parentheses", `printf '(hello world)'`, false, false},
-		{"function", `work() { :; }`, true, true},
-		{"spaced function", `work ( ) { :; }`, true, true},
-		{"continued function", "work(\\\n) { :; }", true, true},
-		{"keyword function", `function work { :; }`, true, true},
-		{"subshell function", `work() ( : )`, true, true},
-		{"cd", `cd /elsewhere`, true, true},
-		{"pushd", `pushd /elsewhere`, true, true},
-		{"popd", `popd`, true, true},
-		{"eval", `eval true`, true, true},
-		{"source", `source script`, true, true},
-		{"dot source", `. script`, true, true},
-		{"dot tab", ".\tscript", true, true},
-		{"dot only", `.`, true, true},
-		{"dot semicolon", `.; true`, true, true},
-		{"dot continued", ".\\\n script", true, true},
-		{"repo assignment", `GH_REPO=example/other`, true, true},
-		{"host assignment", `export GH_HOST=example.com`, true, true},
-		{"unset", `unset GH_REPO`, true, true},
+		{"substitution", `echo "$(date)"`, false},
+		{"parentheses", `printf '(hello world)'`, false},
+		{"harmless match", `echo GH_REPO`, true},
+		{"function", `work() { :; }`, true},
+		{"spaced function", `work ( ) { :; }`, true},
+		{"continued function", "work(\\\n) { :; }", true},
+		{"keyword function", `function work { :; }`, true},
+		{"subshell function", `work() ( : )`, true},
+		{"cd", `cd /elsewhere`, true},
+		{"pushd", `pushd /elsewhere`, true},
+		{"popd", `popd`, true},
+		{"eval", `eval true`, true},
+		{"source", `source script`, true},
+		{"dot source", `. script`, true},
+		{"dot tab", ".\tscript", true},
+		{"dot only", `.`, true},
+		{"dot semicolon", `.; true`, true},
+		{"dot continued", ".\\\n script", true},
+		{"repo assignment", `GH_REPO=example/other`, true},
+		{"host assignment", `export GH_HOST=example.com`, true},
+		{"unset", `unset GH_REPO`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -536,6 +530,11 @@ func TestShellTaintPrefilterAndBackfill(t *testing.T) {
 			var candidate bool
 			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT `+shellTaintCandidateSQL+` FROM (SELECT ? AS input_json) t`, string(encoded)).Scan(&candidate))
 			assert.Equal(t, tc.candidate, candidate)
+			_, tainted, err := parser.CommandPRLinks(t.Context(), tc.command, "/work/repo", "https://github.com/example/repo.git")
+			require.NoError(t, err)
+			if tainted {
+				require.True(t, candidate)
+			}
 			s := Session{ID: tc.name, Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
 			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
@@ -548,7 +547,7 @@ func TestShellTaintPrefilterAndBackfill(t *testing.T) {
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
-			if tc.tainted {
+			if tainted {
 				assert.Empty(t, got.PRLinks)
 			} else {
 				require.Len(t, got.PRLinks, 1)

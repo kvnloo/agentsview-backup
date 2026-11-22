@@ -36,6 +36,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
+	github.com/tdewolff/parse/v2 v2.8.16
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/thlib/go-timezone-local v0.0.9
@@ -55,6 +56,7 @@ require (
 	hegel.dev/go/hegel v0.9.29
 	modernc.org/libc v1.80.1
 	modernc.org/sqlite v1.62.0
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (
@@ -145,7 +147,6 @@ require (
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/spf13/pathologize v1.1.0 // indirect
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f // indirect
-	github.com/tdewolff/parse/v2 v2.8.16 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.2 // indirect
@@ -172,7 +173,6 @@ require (
 	gotest.tools/gotestsum v1.13.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	mvdan.cc/sh/v3 v3.14.1 // indirect
 )
 
 tool gotest.tools/gotestsum

@@ -1,5 +1,6 @@
 {
   "version": 184,
+  "bump": true,
   "digest": "89682fd2a97cbd203c7c5f267ba5412db83fdddf828b08af56e9e3f1dc9f8801",
   "providers": {
     "aider": {

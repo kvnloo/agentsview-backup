@@ -94,7 +94,7 @@ const microdollarsPerAICredit = 10_000
 // AICreditsFromCost converts a USD cost into AI credits when the
 // agent's cost is denominated in AI credits, and returns 0 otherwise.
 // It is the single home of the credit conversion shared by the SQLite,
-// PostgreSQL, and DuckDB usage paths; a per-agent credit rate would
+// PostgreSQL, and ClickHouse usage paths; a per-agent credit rate would
 // slot in here rather than at each accumulation site.
 func AICreditsFromCost(agent string, cost money.Money) float64 {
 	if cost.Microdollars == 0 || !parser.AgentNameUsesAICredits(agent) {
@@ -110,7 +110,7 @@ const microdollarsPerDollar = 1_000_000.0
 // CostUSDFromCost renders cost as float64 dollars for the deprecated
 // SessionUsage.CostUSD compatibility field, or nil when hasCost is
 // false. It is the single place that performs the microdollars-to-
-// dollars conversion, so the SQLite, PostgreSQL, and DuckDB session
+// dollars conversion, so the SQLite, PostgreSQL, and ClickHouse session
 // usage paths and the subagent rollup combiner all report an
 // identical value for the same cost.
 func CostUSDFromCost(hasCost bool, cost money.Money) *float64 {
@@ -297,11 +297,16 @@ func (f UsageFilter) Location() *time.Location {
 // usageLocalLocation resolves the process-local zone once. Tests replace it.
 var usageLocalLocation = sync.OnceValue(timeutil.LocalLocation)
 
-// LoadLocationOr resolves a timezone name once per process and returns
-// fallback for an empty or unknown name.
+// LoadLocationOr caches named timezones and returns fallback for an empty or
+// unknown name. Local follows the current process timezone.
 func LoadLocationOr(name string, fallback *time.Location) *time.Location {
 	if name == "" {
 		return fallback
+	}
+	if name == "Local" {
+		// Tests can replace time.Local between report requests, so a cached
+		// pointer could keep using the previous timezone's date boundaries.
+		return time.Local //nolint:forbidigo // Preserve time.LoadLocation("Local") semantics without caching a mutable global.
 	}
 	if cached, ok := usageLocationCache.Load(name); ok {
 		return cached.(*time.Location)

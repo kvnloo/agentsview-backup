@@ -272,7 +272,8 @@ func TestSessionPushReceiptTracksTranscriptContent(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, original.PayloadHash, resegmented.PayloadHash)
 			for i := range segments {
-				version := fmt.Sprintf(`"v":%d`, messageSegmentFormatVersion)
+				// Records without dialogue text keep the pre-dialogue version.
+				version := fmt.Sprintf(`"v":%d`, messageSegmentPreDialogueVersion)
 				require.Contains(t, segments[i].NDJSON, version)
 				segments[i].NDJSON = strings.Replace(segments[i].NDJSON, version, `"v":1`, 1)
 				segments[i].SHA256 = hashHex([]byte(segments[i].NDJSON))
@@ -541,7 +542,7 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 				var segments []sessionPushSegment
 				require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
 				require.Len(t, segments, 1)
-				old := fmt.Sprintf(`"v":%d`, messageSegmentFormatVersion)
+				old := fmt.Sprintf(`"v":%d`, messageSegmentPreDialogueVersion)
 				require.Contains(t, segments[0].NDJSON, old)
 				segments[0].NDJSON = strings.Replace(segments[0].NDJSON, old, fmt.Sprintf(`"v":%d`, messageSegmentFormatVersion+1), 1)
 				segments[0].SHA256 = hashHex([]byte(segments[0].NDJSON))

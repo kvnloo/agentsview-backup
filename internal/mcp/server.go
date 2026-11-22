@@ -42,6 +42,7 @@ const (
 	ToolGetActivityReport    = "get_activity_report"
 	ToolGetToolUsage         = "get_tool_usage"
 	ToolGetQualitySignals    = "get_quality_signals"
+	ToolGetTermTrends        = "get_term_trends"
 	ToolSearchDocs           = "search_docs"
 	ToolGetFrictionDigest    = "get_friction_digest"
 	ToolListFrictionPatterns = "list_friction_patterns"
@@ -82,6 +83,7 @@ func ParseProfile(name string) (Profile, error) {
 // tests can control the self-reference exclusion window (defaults to
 // time.Now).
 type ServeOptions struct {
+	CallLogDir         string
 	DiscoveryDirectory string
 	BackendURL         string
 	Service            service.SessionService
@@ -116,15 +118,34 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}},
 	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
+	s.AddReceivingMiddleware(argumentHints)
+
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			if method != "tools/call" {
 				return next(ctx, method, request)
 			}
 			ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
+			start := time.Now()
 			result, err := next(ctx, method, request)
+			elapsed := time.Since(start)
 			if call, ok := result.(*mcp.CallToolResult); ok && call != nil && stale() {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
+			}
+			if req, ok := request.(*mcp.CallToolRequest); ok {
+				var tool *mcp.Tool
+				if call, ok := result.(*mcp.CallToolResult); opts.CallLogDir != "" && req.Params != nil && ok && call != nil && call.IsError {
+					listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session})
+					if list, ok := listed.(*mcp.ListToolsResult); listErr == nil && ok {
+						for _, item := range list.Tools {
+							if item.Name == req.Params.Name {
+								tool = item
+								break
+							}
+						}
+					}
+				}
+				warnCallLogFailure(recordToolCall(opts.CallLogDir, req, result, err, elapsed, tool))
 			}
 			return result, err
 		}
@@ -157,7 +178,9 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
 				"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
 				"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
-				"unless include_active is set. Set session_id to look up one raw UUID or full stored ID. " +
+				"unless include_active is set. Empty pages with excluded active sessions return a hints entry " +
+				"with code: excluded_active, the count, and retry_with. " +
+				"Set session_id to look up one raw UUID or full stored ID. " +
 				"That lookup returns one metadata row, includes active sessions, ignores other search " +
 				"arguments, and reports missing or ambiguous raw IDs as errors. Its snippet is empty and " +
 				"match_ordinal is 0; call get_messages with that anchor for the first message. " +
@@ -223,8 +246,9 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
 			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
-			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a substring search of several words lists exact text first, " +
+			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea; concepts always use semantic mode. " +
+			"Use session_id without pattern or concepts to list messages. " +
+			"The default mode remains substring. On SQLite, PostgreSQL, and ClickHouse, a substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
 			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +
@@ -258,10 +282,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}, t.sessionUsage)
 
 		mcp.AddTool(s, &mcp.Tool{
-			Name: ToolGetToolCalls,
-			Description: "List the tool calls one session made, in order: tool name, category, input, and " +
-				"result size. Filter by category (for example Edit, Write, or Bash) to see what the agent " +
-				"ran or changed. Inputs have secret-shaped values masked and are cut to max_input_chars.",
+			Name:        ToolGetToolCalls,
+			Description: "List tool calls with masked inputs. Set include_results for saved results and events.",
 			Annotations: readOnly,
 		}, t.toolCalls)
 
@@ -308,6 +330,16 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"also get example sessions for one signal.",
 			Annotations: readOnly,
 		}, t.qualitySignals)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetTermTrends,
+			Description: "Legacy term-frequency counts over time, kept for agent harnesses that used the " +
+				"removed Trends page. Counts case-insensitive matches of each term in user and assistant " +
+				"messages, by day, week (default), or month, with each bucket's message count for computing " +
+				"rates. Up to 12 terms; join variants with | to count them as one series, e.g. " +
+				"\"load bearing | load-bearing\". Use the search tools to find prior work.",
+			Annotations: readOnly,
+		}, t.termTrends)
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchDocs,

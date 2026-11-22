@@ -62,7 +62,7 @@ func TestNewServer_RegistersReadOnlyTools(t *testing.T) {
 	require.NotNil(t, srv)
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 22)
+	require.Len(t, tools.Tools, 23)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -121,10 +121,10 @@ func TestServer_GetMemoryStatus(t *testing.T) {
 	assert.Equal(t, service.MemoryPartial, status.Status)
 }
 
-// Measured catalogs: full 86,462 bytes, memory 21,219 bytes.
-// Budgets allow 10%, rounded up to 1,000 bytes; increases need review and matching docs/mcp.md updates.
+// Measured catalogs: full 96,068 bytes, memory 23,406 bytes.
+// Increases need review and matching docs/mcp.md updates.
 const (
-	fullCatalogBudget   = 96_000
+	fullCatalogBudget   = 97_000
 	memoryCatalogBudget = 24_000
 )
 
@@ -217,7 +217,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 19)
+	require.Len(t, tools.Tools, 20)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 		assert.NotEqual(t, ToolListRecall, tool.Name)
@@ -470,4 +470,24 @@ func TestCompactionSummaryTool(t *testing.T) {
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, "summary", out.Summaries[0].Content)
 	assert.Equal(t, "codex:session", out.Summaries[0].SessionID)
+}
+
+func TestServer_BudgetTextResults(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	messages := make([]db.Message, 50)
+	for i := range messages {
+		messages[i] = dbtest.AsstMsg("budget", i, "needle "+strings.Repeat("<&", 950))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	require.Len(t, result.Content, 1)
+	content, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
+	assert.Contains(t, content.Text, `\u003c`)
+	assert.Contains(t, content.Text, `\u0026`)
 }

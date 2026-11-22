@@ -502,6 +502,8 @@ type Engine struct {
 	// groupedReconcileGroupHook is a test seam called with syncMu held at the
 	// start of each ReconcileProviderRootsGrouped group; nil in production.
 	groupedReconcileGroupHook func(index int)
+	// pollScans holds the metadata snapshots polling compares between passes.
+	pollScans pollScanState
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -886,7 +888,7 @@ func NewEngine(ctx context.Context,
 		recompute = func(context.Context, string) {}
 	}
 	e.signalSched = newSignalScheduler(
-		signalRecomputeInterval, signalRecomputeQuiet,
+		signalRecomputeInterval,
 		// Inline runs happen from markDirty inside writeIncremental,
 		// whose callers already hold syncMu.
 		recompute,
@@ -902,6 +904,9 @@ func NewEngine(ctx context.Context,
 			flush()
 		},
 	)
+	// A deferred recompute lands after the sync that wrote the session
+	// reported its change, so report the new signals for live readers.
+	e.signalSched.flushed = func() { e.emit("sessions") }
 	if e.disableSignalRecompute {
 		e.signalSched.stop()
 	}
@@ -1644,6 +1649,9 @@ func (e *Engine) syncChangedPathsLocked(
 	prepared := e.prepareChangedPathSync(ctx, paths)
 	summary.sources = len(prepared.files)
 	defer func() { log.Print(summary.finish(e, stats)) }()
+	if len(prepared.missingPaths) > 0 && ctx.Value(pollScanSyncContextKey{}) != nil {
+		return SyncStats{}, 0, errPollScanPathMissing
+	}
 	stats, tombstoned, err = e.applyChangedPathSyncLocked(ctx, prepared)
 	// Title store events carry no session files, so this also handles them.
 	if err == nil && !stats.Aborted {
@@ -3283,7 +3291,17 @@ const (
 // Use this as the mtime cutoff for quick incremental syncs —
 // anything modified at or after this time must be re-evaluated.
 func (e *Engine) LastSyncStartedAt(ctx context.Context) time.Time {
-	raw, err := e.db.GetSyncState(ctx, syncStateStartedAt)
+	return e.syncStateTime(ctx, syncStateStartedAt)
+}
+
+// LastSyncFinishedAt returns the finish time of the most recent full sync
+// that completed without failures. Returns zero time if none has.
+func (e *Engine) LastSyncFinishedAt(ctx context.Context) time.Time {
+	return e.syncStateTime(ctx, syncStateFinishedAt)
+}
+
+func (e *Engine) syncStateTime(ctx context.Context, key string) time.Time {
+	raw, err := e.db.GetSyncState(ctx, key)
 	if err != nil || raw == "" {
 		return time.Time{}
 	}
@@ -13082,7 +13100,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	}
 	ctx = e.parsePolicyContext(ctx)
 	if err := e.lockSync(try); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrSessionRefreshNotStarted, err)
 	}
 	preserved := false
 	sessionsChanged := false

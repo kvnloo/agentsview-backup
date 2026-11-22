@@ -96,6 +96,12 @@ Add to your MCP client config (e.g. Claude Desktop):
 				Profile: profile,
 			}
 
+			cfg, cfgErr := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
+			if cfgErr == nil {
+				opts.CallLogDir = filepath.Join(cfg.DataDir, "mcp", "calls")
+			} else if httpAddr == "" {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: MCP calls will not be recorded: %v\n", cfgErr)
+			}
 			var serveErr error
 			if httpAddr != "" {
 				addr, err := normalizeMCPHTTPAddr(httpAddr, httpAllowInsecure)
@@ -106,15 +112,14 @@ Add to your MCP client config (e.g. Claude Desktop):
 				// an unauthenticated remote read surface over the session
 				// archive. Loopback binds stay local-trust (no listener
 				// auth), matching the daemon.
-				cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
-				if err != nil {
-					return fmt.Errorf("loading config: %w", err)
+				if cfgErr != nil {
+					return fmt.Errorf("loading config: %w", cfgErr)
 				}
 				if err := cfg.ApplyDeploymentAuth(); err != nil {
 					return fmt.Errorf("loading listener auth: %w", err)
 				}
 				// Provision a token when auth is required but none exists
-				// yet, matching serve/pg/duckdb so enabling require_auth is
+				// yet, matching serve and pg so enabling require_auth is
 				// sufficient for first-time authenticated startup.
 				if cfg.RequireAuth && cfg.AuthToken == "" {
 					if err := cfg.EnsureAuthToken(); err != nil {
@@ -168,7 +173,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 	cmd.Flags().StringVar(&profileName, "profile", string(mcpserver.ProfileFull),
 		"Tool profile to advertise (full or memory)")
 
-	cmd.AddCommand(newMCPStatusCommand())
+	cmd.AddCommand(newMCPStatusCommand(), newMCPCallsCommand())
 	return cmd
 }
 
@@ -302,8 +307,8 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	return runtime == nil || !runtime.ReadOnly
 }
 
-// SupportsFriction asks a running read-only daemon, which may be a DuckDB or
-// ClickHouse mirror without friction tables. A writable archive daemon, or
+// SupportsFriction asks a running read-only daemon, which may be a
+// ClickHouse replica without friction tables. A writable archive daemon, or
 // the one started on demand, serves the friction reads.
 func (s *mcpDaemonService) SupportsFriction() bool {
 	s.mu.Lock()
@@ -530,6 +535,14 @@ func (s *mcpDaemonService) SignalAnalytics(
 ) (*db.SignalsAnalyticsResponse, error) {
 	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.SignalsAnalyticsResponse, error) {
 		return svc.SignalAnalytics(ctx, req)
+	})
+}
+
+func (s *mcpDaemonService) TermTrends(
+	ctx context.Context, req service.TermTrendsRequest,
+) (*db.TrendsTermsResponse, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.TrendsTermsResponse, error) {
+		return svc.TermTrends(ctx, req)
 	})
 }
 

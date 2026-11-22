@@ -22,6 +22,12 @@ const ingestionWaitBudget = 2 * time.Second
 // readFlushMinGap is the shortest time between syncs started for readers.
 const readFlushMinGap = time.Second
 
+// readLiveHold is how long an archive read keeps the watcher at its live
+// interval, as an open web UI does. A burst of reads then finds changes
+// synced in the background and skips the catch-up wait; only the first read
+// after a quiet stretch waits.
+const readLiveHold = 2 * time.Minute
+
 // collectionPaused is the gap that keeps background polling from running.
 const collectionPaused = time.Duration(math.MaxInt64)
 
@@ -66,12 +72,22 @@ type daemonIngestion struct {
 	paused bool
 	// pending marks an archive that has not yet synced what a pause collected.
 	pending bool
+	// sourcesChangedAt is when a settings reload last changed the session
+	// sources. A replacement watcher sees only later changes, so sessions
+	// already under a newly added root wait for a full pass.
+	sourcesChangedAt time.Time
 	// missedScheduled records a periodic pass skipped during the pause.
 	missedScheduled bool
 	catchup         chan struct{}
 	catchupDeadline time.Time
 	lastCatchup     time.Time
 	liveEnabled     bool
+	// readHold is how long a read keeps the live interval held. The hold
+	// lasts until readHoldUntil; readHoldTimer releases it after that.
+	readHold        time.Duration
+	readHoldUntil   time.Time
+	readHoldTimer   *time.Timer
+	readHoldRelease func()
 }
 
 // ingestionWatchers is one generation of change detection for a fixed
@@ -82,6 +98,7 @@ type ingestionWatchers struct {
 	pauseDispatch func()
 	queueRetry    func(agentsync.WatchBatch)
 	flushPending  func(context.Context) error
+	flushRetry    func(context.Context) error
 	poller        *sharedUnwatchedPollCoordinator
 }
 
@@ -105,6 +122,7 @@ func newDaemonIngestion(
 		database:    database,
 		idleTracker: idleTracker,
 		load:        load,
+		readHold:    readLiveHold,
 	}
 	d.cfg.Store(&cfg)
 	d.watchers = d.startWatchers(cfg)
@@ -242,7 +260,9 @@ func (d *daemonIngestion) Suspend() {
 
 // EnsureFresh brings the archive up to date for a reader. It ends an idle
 // pause, and while the background interval is holding changes back it syncs
-// them first. Readers share one catch-up and its wait deadline.
+// them first. Readers share one catch-up and its wait deadline. Each read
+// also holds the live interval for readHold, so the watcher syncs later
+// changes in the background and the reads that follow do not wait.
 func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 	finish, ok := d.idleTracker.BeginWork()
 	if !ok {
@@ -255,18 +275,21 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 		return false
 	}
 	done, started := d.catchup, false
-	if done == nil {
-		if !d.pending && !d.readFlushDueLocked() {
-			d.mu.Unlock()
-			finish()
-			return true
-		}
+	// The flush check comes before the hold, which would otherwise hide the
+	// changes the background interval held back.
+	if done == nil && (d.pending || d.readFlushDueLocked()) {
 		done, started = d.registerCatchupLocked(), true
 		d.applying.Go(func() {
 			defer finish()
-			d.catchUp(d.ctx, false)
+			_ = d.catchUp(d.ctx, false, false) // catchUp logs its own failure
 			d.finishCatchup(done)
 		})
+	}
+	d.extendReadHoldLocked()
+	if done == nil {
+		d.mu.Unlock()
+		finish()
+		return true
 	}
 	deadline := d.catchupDeadline
 	d.mu.Unlock()
@@ -297,6 +320,40 @@ func (d *daemonIngestion) readFlushDueLocked() bool {
 		return false
 	}
 	return time.Since(d.lastCatchup) >= max(cfg.SyncInterval, readFlushMinGap)
+}
+
+// extendReadHoldLocked holds the live interval until readHold from now.
+func (d *daemonIngestion) extendReadHoldLocked() {
+	d.readHoldUntil = time.Now().Add(d.readHold)
+	if d.readHoldTimer != nil {
+		return
+	}
+	d.readHoldRelease = d.syncInterval.Hold(agentsync.LiveInterval)
+	d.readHoldTimer = time.AfterFunc(d.readHold, d.expireReadHold)
+}
+
+// expireReadHold releases the read hold once no read has extended it for
+// readHold. A read that extended it re-arms the timer for the remainder.
+func (d *daemonIngestion) expireReadHold() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.readHoldTimer == nil {
+		return
+	}
+	if left := time.Until(d.readHoldUntil); left > 0 {
+		d.readHoldTimer.Reset(left)
+		return
+	}
+	d.releaseReadHoldLocked()
+}
+
+func (d *daemonIngestion) releaseReadHoldLocked() {
+	if d.readHoldTimer == nil {
+		return
+	}
+	d.readHoldTimer.Stop()
+	d.readHoldRelease()
+	d.readHoldTimer, d.readHoldRelease = nil, nil
 }
 
 // endPauseLocked reopens watcher delivery after an idle pause. Delivery stays
@@ -343,7 +400,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 			// periodic pass and attached sources own. The watcher's set still
 			// carries what a full pass leaves alone, such as a source deleted
 			// during the pause.
-			d.catchUp(ctx, true)
+			_ = d.catchUp(ctx, true, false) // catchUp logs its own failure
 		}
 		return stats, err
 	}
@@ -354,7 +411,12 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 // complete, and a set too large to keep was already promoted to a full sync.
 // Sources no watcher covers are caught up by the polls and the periodic pass
 // that the pause held back, unless a full pass just ran.
-func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
+//
+// retryNow serves a caller that asked for a sync now. It also syncs watcher
+// work that failed and waits for its retry, and it leaves attached archives to
+// the caller's manual drain, which skips their retry delay. Readers leave both
+// to their backoff.
+func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan, retryNow bool) error {
 	d.mu.Lock()
 	// pending outlives paused when a foreground sync ended the pause and then
 	// failed, so it is what says a wake still owes its catch-up.
@@ -366,6 +428,8 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
 
 	var err error
 	switch {
+	case open && retryNow:
+		err = watchers.flushRetry(ctx)
 	case open:
 		err = watchers.flushPending(ctx)
 	case owed && !d.engine.StartupReconciled():
@@ -385,7 +449,7 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
 		switch {
 		case missedScheduled && scheduled != nil:
 			scheduled(ctx)
-		case err == nil && d.attached != nil:
+		case err == nil && d.attached != nil && !retryNow:
 			_, err = d.attached.DrainScheduled(ctx)
 		}
 	}
@@ -401,6 +465,41 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
 		d.watchers.openDispatch()
 	}
 	d.mu.Unlock()
+	return err
+}
+
+// FlushChanges brings the archive up to date for a caller that asked for a
+// sync now, without rediscovering it. It syncs what the watchers collected,
+// including work waiting for a retry. Attached archives are the caller's to
+// drain, as after a full pass. It reports false, having synced nothing,
+// when the watchers cannot vouch for the archive: before the startup pass has
+// opened their delivery, after ingestion stopped, or after a settings change
+// that no full pass has covered yet. The caller then runs a full pass. Roots no
+// watcher covers keep their poller's schedule.
+func (d *daemonIngestion) FlushChanges(ctx context.Context) (bool, error) {
+	finish, ok := d.idleTracker.BeginWork()
+	if !ok {
+		return false, nil
+	}
+	defer finish()
+	d.mu.Lock()
+	ready, changed := !d.stopped && d.dispatchOpen, d.sourcesChangedAt
+	d.mu.Unlock()
+	if !ready || !d.fullPassCovers(ctx, changed) {
+		return false, nil
+	}
+	return true, d.catchUp(ctx, false, true)
+}
+
+// fullPassCovers reports whether a full pass that started after changedAt
+// has completed. A pass that failed or still runs leaves new roots unread.
+func (d *daemonIngestion) fullPassCovers(ctx context.Context, changedAt time.Time) bool {
+	if changedAt.IsZero() {
+		return true
+	}
+	started := d.engine.LastSyncStartedAt(ctx)
+	return started.After(changedAt) &&
+		!d.engine.LastSyncFinishedAt(ctx).Before(started)
 }
 
 // Reload reads the saved configuration and applies it in the background. It
@@ -426,6 +525,7 @@ func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 func (d *daemonIngestion) Stop() {
 	d.mu.Lock()
 	d.stopped = true
+	d.releaseReadHoldLocked()
 	d.mu.Unlock()
 	d.applying.Wait()
 	d.mu.Lock()
@@ -475,6 +575,7 @@ func (d *daemonIngestion) applySaved() {
 	}
 	d.engine.ReconfigureSources(engineSourceConfig(next))
 	d.mu.Lock()
+	d.sourcesChangedAt = time.Now()
 	old, oldLive := d.watchers, d.live
 	flushOld := false
 	if watchers != nil && !d.stopped {
@@ -555,6 +656,7 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 		pauseDispatch: watcher.pauseDispatch,
 		queueRetry:    watcher.queueRetry,
 		flushPending:  watcher.flushPending,
+		flushRetry:    watcher.flushRetry,
 		poller:        poller,
 	}
 }

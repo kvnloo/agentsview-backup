@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func sessionPushFixture(id string) (SessionPushReceipt, SessionBatchWrite) {
@@ -538,4 +539,25 @@ func TestSessionPushLauncherParentEditableAfterNativeSpawnReference(t *testing.T
 			}
 		})
 	}
+}
+
+// A push carries the links the parser recorded, as an export does. The
+// receiver derives prompt links from the pushed messages itself.
+func TestLoadSessionPushDataCarriesStructuredPRLinks(t *testing.T) {
+	d := testDB(t)
+	recorded, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
+	require.True(t, ok)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
+		ID: "session", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{recorded},
+	}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{
+		{SessionID: "session", Ordinal: 1, Role: "user", Content: "review https://github.com/o/r/pull/8"},
+	}))
+
+	session, _, err := d.LoadSessionPushData(t.Context(), "session", smallArtifactExportLoadLimits())
+
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Len(t, session.PRLinks, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/1", session.PRLinks[0].URL)
 }

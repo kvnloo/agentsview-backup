@@ -13,7 +13,9 @@ only; `TriggerNow` bypasses cooldown.
 
 Pricing refresh and conversation tombstone pruning use the scheduler. Periodic
 session sync, vector embedding, and recall extraction still own their timing;
-migrating them is separate work.
+migrating them is separate work. PostgreSQL serve fills stale Dashboard
+frustration counts at launch after Usage warm-up when the store can write
+the count table.
 
 ## Memory and Work Bounds
 
@@ -44,6 +46,26 @@ migrating them is separate work.
 - Observe retention long enough to reproduce the reported growth window. On
   macOS, record `vmmap` physical footprint and dirty memory. Use portable Go
   allocation and heap metrics on Linux and Windows.
+
+## Fallback polling
+
+- The polling coordinator in `cmd/agentsview/unwatched_poll.go` owns fallback
+  polling. It decides which scopes are available, including `Probe` checks,
+  and hands them to `Engine.PollProviderRootsGrouped`. Do not add a second
+  owner, such as a separate scan loop or timer, for scopes it covers.
+- Providers that declare `PollMetadataScan` let a pass compare file metadata
+  with the previous pass and sync only changed files through
+  `SyncPathsContext`. Anything the pass cannot compare goes through
+  `ReconcileProviderRootsGrouped`. A polling page whose changed file is gone
+  by the time it syncs stops instead of marking the source missing, so the
+  next pass sees the file vanish and reconciles behind the coordinator's
+  availability checks.
+- Call `Engine.ForgetPollScans` when archive state changes without a file
+  change, as restoring a trashed session does. Polling otherwise treats the
+  unchanged files as already applied.
+- A metadata snapshot is taken before the archive work it describes and kept
+  only after that work succeeds. A stale snapshot only repeats work; a snapshot
+  newer than the archive would hide a change.
 
 ## Codex rollout compression
 

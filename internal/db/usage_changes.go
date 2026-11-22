@@ -13,6 +13,10 @@ const (
 	archiveMetadataSearchChangeRevisionKey    = "search_change_revision"
 )
 
+const searchTokenSQL = `
+ INSERT INTO archive_metadata (key, value) VALUES ('search_history_token', lower(hex(randomblob(16))))
+ ON CONFLICT(key) DO UPDATE SET value = excluded.value;`
+
 const counterTemplate = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('{{counter}}', '1')
@@ -49,6 +53,13 @@ func usageChangeJournalSQL() (string, string) {
   FROM archive_metadata WHERE key = 'usage_change_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
+	creates.WriteString(`INSERT OR IGNORE INTO archive_metadata (key, value) VALUES ('search_history_token', lower(hex(randomblob(16))));` + "\n")
+	// Older writers replace journal triggers but keep these search-owned triggers.
+	for _, event := range []string{"INSERT", "UPDATE"} {
+		name := "trg_search_history_revision_" + strings.ToLower(event)
+		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
+		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON archive_metadata WHEN NEW.key = 'search_change_revision' BEGIN%s\nEND;\n", name, event, searchTokenSQL)
+	}
 	add := func(name, event, table, condition, sessionID string, analytics bool) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
@@ -67,10 +78,16 @@ func usageChangeJournalSQL() (string, string) {
 		if strings.HasPrefix(name, "trg_messages_search_dialogue") || name == "trg_sessions_search_first_message" {
 			body = searchCounterBody
 		}
+		searchToken := table == "sessions" && strings.HasPrefix(name, "trg_sessions_usage_change_") && name != "trg_sessions_usage_change_group_label"
 		if condition != "" {
 			condition = "WHEN " + condition
 		}
 		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
+		if searchToken {
+			tokenTrigger := "trg_search_history_" + name
+			fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", tokenTrigger)
+			fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", tokenTrigger, event, table, condition, searchTokenSQL)
+		}
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id", false)
 	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "message_count", "created_at"}
@@ -136,6 +153,48 @@ func usageChangeJournalSQL() (string, string) {
 		}
 	}
 	return drops.String(), creates.String()
+}
+
+// Independent source triggers survive an older writer reinstalling its journal.
+var dashboardGenerationTriggerSQL = dashboardTriggerSQL()
+
+func dashboardTriggerSQL() string {
+	var sql strings.Builder
+	sql.WriteString("DROP TRIGGER IF EXISTS trg_dashboard_generation_insert; DROP TRIGGER IF EXISTS trg_dashboard_generation_update;\n")
+	for _, name := range []string{"common", "tools", "velocity", "signals", "scope"} {
+		fmt.Fprintf(&sql, "INSERT INTO archive_metadata(key,value) VALUES('dashboard_%s',lower(hex(randomblob(16)))) ON CONFLICT(key) DO NOTHING;\n", name)
+	}
+	tables := []struct {
+		name   string
+		groups map[string][]string
+	}{
+		{"sessions", map[string][]string{"common": DashboardSessionInputs, "tools": DashboardToolsSessionInputs, "signals": DashboardSignalsSessionInputs}},
+		{"messages", map[string][]string{"tools": append([]string{"id"}, DashboardToolsMessageInputs...), "velocity": DashboardVelocityMessageInputs, "signals": DashboardSignalsMessageInputs, "scope": DashboardScopeMessageInputs}},
+		{"tool_calls", map[string][]string{"tools": append([]string{"message_id"}, DashboardToolsCallInputs...), "velocity": append([]string{"message_id"}, DashboardVelocityCallInputs...)}},
+	}
+	for _, table := range tables {
+		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			name := "trg_dashboard_" + table.name + "_" + strings.ToLower(event)
+			fmt.Fprintf(&sql, "DROP TRIGGER IF EXISTS %s; CREATE TRIGGER %s AFTER %s ON %s BEGIN\n", name, name, event, table.name)
+			for _, group := range []string{"common", "tools", "velocity", "signals", "scope"} {
+				columns, ok := table.groups[group]
+				if !ok {
+					continue
+				}
+				condition := "1"
+				if event == "UPDATE" {
+					changes := make([]string, len(columns))
+					for i, column := range columns {
+						changes[i] = "OLD." + column + " IS NOT NEW." + column
+					}
+					condition = strings.Join(changes, " OR ")
+				}
+				fmt.Fprintf(&sql, "INSERT INTO archive_metadata(key,value) SELECT 'dashboard_%s',lower(hex(randomblob(16))) WHERE %s ON CONFLICT(key) DO UPDATE SET value=excluded.value;\n", group, condition)
+			}
+			sql.WriteString("END;\n")
+		}
+	}
+	return sql.String()
 }
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,

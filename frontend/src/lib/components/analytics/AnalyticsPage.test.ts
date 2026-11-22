@@ -5,6 +5,7 @@ import { analytics } from "../../stores/analytics.svelte.js";
 import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { insights } from "../../stores/insights.svelte.js";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
@@ -51,6 +52,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   document.body.innerHTML = "";
   localStorage.clear();
+  gettingStarted.done = new Set();
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};
@@ -63,6 +65,7 @@ afterEach(() => {
   analytics.to = "";
   analytics.selectedDate = null;
   analytics.selectedActivityRange = null;
+  analytics.activity = null;
   analytics.machine = "";
   analytics.model = "";
   analytics.termination = "";
@@ -828,10 +831,7 @@ describe("AnalyticsPage refresh behavior", () => {
   });
 
   it("uses an Activity brush as a Sessions filter without replacing the chart window", async () => {
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get: () => 600,
-    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -1008,5 +1008,27 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(panels).toHaveBeenCalledTimes(beforeRefresh + 2);
     expect(statsRequests).toHaveLength(1);
     expect(showsOpenedPRs()).toBe(true);
+  });
+});
+
+describe("getting started checklist", () => {
+  it("shows the checklist and hides it after dismissal", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".getting-started")?.textContent).toContain("Get started");
+    document
+      .querySelector<HTMLButtonElement>('.getting-started button[aria-label="Dismiss"]')!
+      .click();
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
   });
 });

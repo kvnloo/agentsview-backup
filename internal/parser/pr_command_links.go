@@ -133,6 +133,21 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	default:
 		return nil
 	}
+	valueFlags := map[string]string{
+		"view":     "--json --jq -q --template -t",
+		"diff":     "--color --exclude -e",
+		"checks":   "--interval -i --jq -q --json --template -t",
+		"merge":    "--author-email -A --body -b --body-file -F --match-head-commit --subject -t",
+		"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-milestone --remove-project --remove-reviewer --title -t",
+		"comment":  "--attach --body -b --body-file -F",
+		"review":   "--body -b --body-file -F",
+		"close":    "--comment -c",
+		"reopen":   "--comment -c",
+		"checkout": "--branch -b --worktree",
+		"lock":     "--reason -r",
+		"revert":   "--body -b --body-file -F --title -t",
+	}
+	takesValue := strings.Fields(valueFlags[args[i+1]])
 	for j := i + 2; j < len(args); j++ {
 		if !call.Literal[j] {
 			if selector == "" {
@@ -161,6 +176,16 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
+			flag, _, attached := strings.Cut(arg, "=")
+			for _, valueFlag := range takesValue {
+				if flag == valueFlag && !attached {
+					j++
+					if j >= len(args) {
+						return nil
+					}
+					break
+				}
+			}
 			continue
 		}
 		if selector == "" {

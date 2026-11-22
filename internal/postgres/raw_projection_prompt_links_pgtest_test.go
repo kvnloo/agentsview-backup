@@ -234,7 +234,7 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}, db.DecodePRLinks(links))
 }
 
-func TestRawProjectionDoesNotInferFromRecordedRemote(t *testing.T) {
+func TestRawProjectionUsesRecordedRemote(t *testing.T) {
 	f := newProjectionFixture(t)
 	outcome := projectionOutcome("Review changes")
 	outcome.Outcome.Results[0].Result.Session.GitRemote = "https://github.com/example/fork.git"
@@ -245,7 +245,9 @@ func TestRawProjectionDoesNotInferFromRecordedRemote(t *testing.T) {
 	require.NoError(t, err)
 	var links string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	assert.Empty(t, db.DecodePRLinks(links))
+	found := db.DecodePRLinks(links)
+	require.Len(t, found, 1)
+	assert.Equal(t, "https://github.com/example/fork/pull/42", found[0].URL)
 }
 
 func TestRawProjectionFindsCommandPRLinks(t *testing.T) {

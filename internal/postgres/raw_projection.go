@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -236,6 +237,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 					prepared.Signals.ToolObservations = []db.ToolObservation{}
 				}
 			}
+		}
+		if decision.Action != ingest.HistoryPreserve {
+			prepared.RecordedGitRemote = export.WithRecordedGitRemote(export.ProjectIdentityObservation{}, c.Parsed.Session.GitRemote).GitRemote
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)

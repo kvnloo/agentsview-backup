@@ -30,6 +30,8 @@ EOF`, remote, ""},
 		{`GH_REPO=other/repo gh pr view 42`, remote, ""},
 		{`f() { cd /other; }; gh pr view 42`, remote, ""},
 		{`cd /other; gh pr view 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42"},
+		{`gh pr comment --body 41 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42"},
+		{`gh pr view --json title 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`gh pr create -R example/repo`, remote, ""},
 		{`gh pr view 42 --repo=`, remote, ""},
 	} {

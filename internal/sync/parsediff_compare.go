@@ -58,7 +58,11 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, "")
+	remote, err := e.db.SessionPRLinkRemote(ctx, stored.ID)
+	if err != nil {
+		return nil, err
+	}
+	toolLinks, err := db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, remote)
 	if err != nil {
 		return nil, err
 	}

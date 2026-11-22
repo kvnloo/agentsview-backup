@@ -277,11 +277,103 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools))
+	links := parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools)
+	var omitted bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') AND input_json IS NULL)`, id).Scan(&omitted); err != nil {
+		return err
+	}
+	if omitted {
+		links = parser.CombinePRLinks(DecodePRLinks(stored), links)
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, links)
 }
 
-func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string, _ []Message) error {
-	return refreshSessionPromptPRLinksTx(ctx, tx, id)
+func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string, messages []Message) error {
+	prompts, err := PromptPRLinksContext(ctx, messages)
+	if err != nil {
+		return err
+	}
+	hasTools := false
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.Category == "Bash" || call.Category == "Task" {
+				hasTools = true
+				break
+			}
+		}
+	}
+	var tools []PRLink
+	if hasTools {
+		var cwd, remote string
+		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), COALESCE((SELECT MAX(git_remote) FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1),'') FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
+			return err
+		}
+		tools, err = ToolCallPRLinks(ctx, messages, cwd, remote)
+		if err != nil {
+			return err
+		}
+		if remote != "" {
+			explicit, err := ToolCallPRLinks(ctx, messages, cwd, "")
+			if err != nil {
+				return err
+			}
+			if EncodePRLinks(tools) != EncodePRLinks(explicit) {
+				// Earlier commands in a shared shell can change the checkout.
+				rows, err := tx.Query(`SELECT t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name NOT IN ('exec_command','shell_command','shell') AND m.ordinal < ? AND (t.input_json IS NULL OR `+shellTaintCandidateSQL+`) ORDER BY m.ordinal, t.id`, id, messages[0].Ordinal)
+				if err != nil {
+					return err
+				}
+				tainted := false
+				for rows.Next() {
+					var name string
+					var input sql.NullString
+					if err := rows.Scan(&name, &input); err != nil {
+						rows.Close()
+						return err
+					}
+					if !input.Valid {
+						tainted = true
+						break
+					}
+					_, changed, err := callPRLinks(ctx, "Bash", name, input.String, cwd, remote)
+					if err != nil {
+						rows.Close()
+						return err
+					}
+					if changed {
+						tainted = true
+						break
+					}
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return err
+				}
+				if err := rows.Close(); err != nil {
+					return err
+				}
+				if tainted {
+					tools = explicit
+				}
+			}
+		}
+	}
+	derived := parser.CombinePRLinks(prompts, tools)
+	if len(derived) == 0 {
+		return nil
+	}
+	var stored string
+	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
+}
+
+// SessionPRLinkRemote returns the single-candidate remote recorded for a session.
+func (db *DB) SessionPRLinkRemote(ctx context.Context, id string) (string, error) {
+	var remote string
+	err := db.getReader().QueryRowContext(ctx, `SELECT COALESCE(MAX(git_remote),'') FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1`, id).Scan(&remote)
+	return remote, err
 }
 
 // GetSessionStructuredPRLinks returns only parser-recorded links.
@@ -329,6 +421,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
+			Task    string         `json:"task"`
 			Message string         `json:"message"`
 			Content jsontext.Value `json:"content"`
 		}
@@ -337,7 +430,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		}
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
-		links, err := parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+content)
+		links, err := parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+payload.Task+"\n"+content)
 		return links, false, err
 	}
 	if category != "Bash" {
@@ -396,12 +489,14 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 	return parser.CombinePRLinks(lists...), nil
 }
 
+const shellTaintCandidateSQL = `t.input_json LIKE '%cd%' OR t.input_json LIKE '%pushd%' OR t.input_json LIKE '%popd%' OR t.input_json LIKE '%eval%' OR t.input_json LIKE '%source%' OR t.input_json LIKE '%. %' OR t.input_json LIKE '%GH_REPO%' OR t.input_json LIKE '%GH_HOST%' OR t.input_json LIKE '%(%' OR t.input_json LIKE '%function %'`
+
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, remote string) ([]PRLink, error) {
 	var cwd string
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,'') FROM sessions WHERE id=?`, id).Scan(&cwd); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json LIKE '%pr%' OR (t.category='Task' AND t.input_json LIKE '%http%') OR (t.category='Bash' AND (t.input_json LIKE '%cd%' OR t.input_json LIKE '%pushd%' OR t.input_json LIKE '%popd%' OR t.input_json LIKE '%eval%' OR t.input_json LIKE '%source%' OR t.input_json LIKE '%.%' OR t.input_json LIKE '%GH_REPO%' OR t.input_json LIKE '%GH_HOST%' OR t.input_json LIKE '%(%'))) ORDER BY m.ordinal, t.id`, id)
+	rows, err := tx.Query(`SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json LIKE '%gh%' OR t.input_json LIKE '%http%' OR (t.category='Bash' AND (`+shellTaintCandidateSQL+`))) ORDER BY m.ordinal, t.id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +522,7 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%pr%' OR (category='Task' AND input_json LIKE '%http%')))")
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%gh%' OR input_json LIKE '%http%'))")
 	if err != nil {
 		return err
 	}

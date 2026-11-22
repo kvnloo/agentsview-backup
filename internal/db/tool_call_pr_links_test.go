@@ -90,16 +90,6 @@ func TestToolCallPRLinksDirectoryChange(t *testing.T) {
 	}
 }
 
-func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr view 42"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"cd /other"})); text(await tools.exec_command({cmd:"gh pr view 44"})); text(await tools.exec_command({cmd:"gh pr view 45",workdir:dir})); text(await tools.exec_command({cmd:"gh pr view 46",workdir:"/repo"+suffix})); text(await tools.exec_command({cmd:"gh pr view 47",workdir:"/other"}))`}}}}
-	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 4)
-	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
-	assert.Equal(t, "https://github.com/example/other/pull/43", links[2].URL)
-	assert.Equal(t, "https://github.com/example/repo/pull/44", links[3].URL)
-}
-
 func TestCodeModeDoesNotTreatRawJavaScriptAsShell(t *testing.T) {
 	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: `gh pr view 42 -R example/repo`}}}}
 	assert.Empty(t, toolCallPRLinks(t, messages, "", ""))

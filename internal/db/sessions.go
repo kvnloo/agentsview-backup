@@ -400,12 +400,11 @@ type Session struct {
 	Cwd                         string `json:"cwd,omitempty"`
 	GitBranch                   string `json:"git_branch,omitempty"`
 	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
-	// PRLinks lists pull or merge requests from structured records, tool calls,
-	// and retained user prompts. A prompt mention does not establish active work.
+	// PRLinks lists pull or merge requests from structured records and retained
+	// user prompts. A prompt mention does not establish active work.
 	// Always serialized, as [] when empty, so a client merging a fresh
 	// response over a cached one drops cleared values.
-	PRLinks     []PRLink `json:"pr_links" required:"false"`
-	ToolPRLinks []PRLink `json:"-"`
+	PRLinks []PRLink `json:"pr_links" required:"false"`
 	// Labels are user- or tool-supplied tags. They are stored apart from
 	// parsed transcript data, so a reparse or resync never changes them.
 	// Always serialized, as [] when empty, like PRLinks.
@@ -1284,16 +1283,8 @@ func (db *DB) GetArtifactExportSession(
 	if err != nil || s == nil {
 		return s, err
 	}
-	return db.loadArtifactExportPRLinks(ctx, s, id)
-}
-
-func (db *DB) loadArtifactExportPRLinks(ctx context.Context, s *Session, id string) (*Session, error) {
-	var structured, tools string
-	if err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&structured, &tools); err != nil {
-		return nil, err
-	}
-	s.PRLinks, s.ToolPRLinks = DecodePRLinks(structured), DecodePRLinks(tools)
-	return s, nil
+	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, id)
+	return s, err
 }
 
 func (db *DB) getSessionFullUncoalesced(
@@ -1584,8 +1575,8 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash,
-			pr_links, structured_pr_links, tool_pr_links, parser_relationship_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			pr_links, structured_pr_links, parser_relationship_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1698,9 +1689,8 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
-		EncodePRLinks(parser.CombinePRLinks(s.PRLinks, s.ToolPRLinks)),
 		EncodePRLinks(s.PRLinks),
-		EncodePRLinks(s.ToolPRLinks),
+		EncodePRLinks(s.PRLinks),
 		s.RelationshipType,
 	}
 }
@@ -1764,7 +1754,7 @@ func (db *DB) upsertSession(ctx context.Context,
 		return result, err
 	}
 	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
 			return result, err
 		}
 	}
@@ -3002,24 +2992,6 @@ func (db *DB) SetSessionDataVersion(ctx context.Context, id string, version int)
 		)
 	}
 	return nil
-}
-
-// SetSessionDataVersionWithToolPRLinks commits derived command links with the completed parse version.
-func (db *DB) SetSessionDataVersionWithToolPRLinks(ctx context.Context, id string, version int, links []PRLink) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := setAndRefreshToolPRLinksTx(tx, id, links, true, db.usageOnlyStorage()); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET data_version=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, version, id); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // SetSessionDataVersions atomically stamps the parser data_version on every

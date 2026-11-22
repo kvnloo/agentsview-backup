@@ -1606,7 +1606,7 @@ func (db *DB) insertMessages(ctx context.Context,
 			return err
 		}
 		if !db.usageOnlyStorage() {
-			if err := appendSessionPromptPRLinksTx(tx, sessionID, messagesForSession(msgs, sessionID)); err != nil {
+			if err := appendSessionPromptPRLinksTx(ctx, tx, sessionID, messagesForSession(msgs, sessionID)); err != nil {
 				return err
 			}
 		}
@@ -1906,7 +1906,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		}
 	}
 	if transcriptChanged {
-		if err := bumpIncrementalTranscriptRevisionTx(tx, sessionID, msgs, update, db.usageOnlyStorage()); err != nil {
+		if err := bumpIncrementalTranscriptRevisionTx(ctx, tx, sessionID, msgs, update, db.usageOnlyStorage()); err != nil {
 			return false, err
 		}
 	}
@@ -2178,7 +2178,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		}
 	}
 	if !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
 	}
@@ -2642,7 +2642,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		}
 	}
 	if !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
 	}

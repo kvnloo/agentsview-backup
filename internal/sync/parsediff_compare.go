@@ -58,7 +58,11 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, prepared.ToolPRLinks, db.PromptPRLinks(msgs))
+	toolLinks, err := db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, "")
+	if err != nil {
+		return nil, err
+	}
+	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, toolLinks, db.PromptPRLinks(msgs))
 	diffs := compareSessionFields(stored, prepared)
 
 	// Tier 1: three exact ordered fingerprints over the stored

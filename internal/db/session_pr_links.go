@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -253,9 +252,9 @@ func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links
 
 const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
 
-func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
-	var stored, structured, recordedTools string
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &recordedTools); err != nil {
+func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
+	var stored, structured string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
 		return err
 	}
 	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
@@ -270,30 +269,25 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(recordedTools), PromptPRLinks(messages)))
+	var remote string
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(git_remote),'') FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1`, id).Scan(&remote); err != nil {
+		return err
+	}
+	tools, err := storedToolCallPRLinksTx(ctx, tx, id, remote)
+	if err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools))
 }
 
-func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
-	derived := PromptPRLinks(messages)
-	if len(derived) == 0 {
-		return nil
-	}
-	return appendDerivedPRLinksTx(tx, id, derived)
+func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string, _ []Message) error {
+	return refreshSessionPromptPRLinksTx(ctx, tx, id)
 }
 
 // GetSessionStructuredPRLinks returns only parser-recorded links.
 func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRLink, error) {
 	var encoded string
 	if err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, id).Scan(&encoded); err != nil {
-		return nil, err
-	}
-	return DecodePRLinks(encoded), nil
-}
-
-// GetSessionToolPRLinks returns links derived from tool calls.
-func (db *DB) GetSessionToolPRLinks(ctx context.Context, id string) ([]PRLink, error) {
-	var encoded string
-	if err := db.getReader().QueryRowContext(ctx, `SELECT tool_pr_links FROM sessions WHERE id=?`, id).Scan(&encoded); err != nil {
 		return nil, err
 	}
 	return DecodePRLinks(encoded), nil
@@ -324,17 +318,12 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
 			return fmt.Errorf("backfilling prompt PR links: %w", err)
 		}
 	}
 	return nil
 }
-
-var (
-	codeModeExecRE = regexp.MustCompile(`\btools\.exec_command\s*\(`)
-	codeModeDirRE  = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
-)
 
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, bool, error) {
 	if category == "Task" {
@@ -356,64 +345,6 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	}
 	if len(input) > 256*1024 {
 		return nil, true, nil
-	}
-	if !jsontext.Value(input).IsValid() && codeModeExecRE.MatchString(input) {
-		var lists [][]PRLink
-		for _, loc := range codeModeExecRE.FindAllStringIndex(input, -1) {
-			if err := ctx.Err(); err != nil {
-				return nil, false, err
-			}
-			end, depth, quote, escaped := loc[1], 1, byte(0), false
-			for end < len(input) && depth > 0 {
-				c := input[end]
-				end++
-				if quote != 0 {
-					if escaped {
-						escaped = false
-					} else if c == '\\' {
-						escaped = true
-					} else if c == quote {
-						quote = 0
-					}
-					continue
-				}
-				switch c {
-				case '\'', '"', '`':
-					quote = c
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-			}
-			if depth != 0 {
-				continue
-			}
-			call := input[loc[0]:end]
-			command := commitCommandText(call)
-			if command == "" {
-				continue
-			}
-			callRemote := remote
-			withoutCommand := commitCommandRE.ReplaceAllString(call, "")
-			if codeModeDirRE.MatchString(withoutCommand) {
-				match := commitWorkdirRE.FindStringIndex(withoutCommand)
-				literal := false
-				if match != nil {
-					rest := strings.TrimSpace(withoutCommand[match[1]:])
-					literal = strings.HasPrefix(rest, ",") || strings.HasPrefix(rest, "}")
-				}
-				if !literal || cwd == "" || filepath.Clean(commitRepository(call, cwd)) != filepath.Clean(cwd) {
-					callRemote = ""
-				}
-			}
-			found, _, err := parser.CommandPRLinks(ctx, command, callRemote)
-			if err != nil {
-				return nil, false, err
-			}
-			lists = append(lists, found)
-		}
-		return parser.CombinePRLinks(lists...), false, nil
 	}
 	var payload struct {
 		Workdir          string `json:"workdir"`
@@ -470,7 +401,7 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, rem
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,'') FROM sessions WHERE id=?`, id).Scan(&cwd); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') ORDER BY m.ordinal, t.id`, id)
+	rows, err := tx.Query(`SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json LIKE '%pr%' OR (t.category='Task' AND t.input_json LIKE '%http%') OR (t.category='Bash' AND (t.input_json LIKE '%cd%' OR t.input_json LIKE '%pushd%' OR t.input_json LIKE '%popd%' OR t.input_json LIKE '%eval%' OR t.input_json LIKE '%source%' OR t.input_json LIKE '%.%' OR t.input_json LIKE '%GH_REPO%' OR t.input_json LIKE '%GH_HOST%' OR t.input_json LIKE '%(%'))) ORDER BY m.ordinal, t.id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -489,88 +420,21 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, rem
 	return ToolCallPRLinks(ctx, messages, cwd, remote)
 }
 
-const toolPRLinksDataVersion = 185
+const toolPRLinksDataVersion = 186
 
 func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task'))")
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%pr%' OR (category='Task' AND input_json LIKE '%http%')))")
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if err := backfillToolPRLinksTx(ctx, tx, id, db.usageOnlyStorage()); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 			return fmt.Errorf("backfilling tool PR links: %w", err)
 		}
 	}
 	return nil
-}
-
-func appendDerivedPRLinksTx(tx transactionQueries, id string, derived []PRLink) error {
-	var stored string
-	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
-		return err
-	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
-}
-
-func setToolPRLinksTx(tx transactionQueries, id string, links []PRLink, replace bool) error {
-	if !replace {
-		var stored string
-		if err := tx.QueryRow(`SELECT tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
-			return err
-		}
-		links = parser.CombinePRLinks(DecodePRLinks(stored), links)
-	}
-	_, err := tx.Exec(`UPDATE sessions SET tool_pr_links=? WHERE id=?`, EncodePRLinks(links), id)
-	return err
-}
-
-func resetUsageOnlyPRLinksTx(tx transactionQueries, id string) error {
-	var stored, structured, tools string
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(pr_links),''), COALESCE(MAX(structured_pr_links),''), COALESCE(MAX(tool_pr_links),'') FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
-		return err
-	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
-}
-
-func setAndRefreshToolPRLinksTx(tx transactionQueries, id string, links []PRLink, replace, usageOnly bool) error {
-	if err := setToolPRLinksTx(tx, id, links, replace); err != nil {
-		return err
-	}
-	if usageOnly {
-		return resetUsageOnlyPRLinksTx(tx, id)
-	}
-	return refreshSessionPromptPRLinksTx(tx, id)
-}
-
-func appendSessionPRLinksWithToolsTx(tx transactionQueries, id string, messages []Message, links []PRLink) error {
-	if err := setToolPRLinksTx(tx, id, links, false); err != nil {
-		return err
-	}
-	if err := appendSessionPromptPRLinksTx(tx, id, messages); err != nil {
-		return err
-	}
-	return appendDerivedPRLinksTx(tx, id, links)
-}
-
-func clearUsageOnlyTextAndStorePRLinksTx(tx transactionQueries, id string, links []PRLink, replace bool) error {
-	if err := setToolPRLinksTx(tx, id, links, replace); err != nil {
-		return err
-	}
-	return clearUsageOnlyTextTx(tx, id)
-}
-
-func backfillToolPRLinksTx(ctx context.Context, tx transactionQueries, id string, usageOnly bool) error {
-	var remote string
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(recorded_git_remote),'') FROM session_project_identity_snapshots WHERE session_id=?`, id).Scan(&remote); err != nil {
-		return err
-	}
-	links, err := storedToolCallPRLinksTx(ctx, tx, id, remote)
-	if err != nil {
-		return err
-	}
-	return setAndRefreshToolPRLinksTx(tx, id, links, true, usageOnly)
 }

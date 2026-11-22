@@ -697,7 +697,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Evener sources in place; source and session identities are unchanged.)
 // (183: prefer structured Antigravity user prompts over skill expansions.)
 // (184: prevent older binaries from overwriting prompt-derived PR links.)
-const dataVersion = 185
+// (185: prevent older binaries from clearing Cursor account usage stamps on reparse.)
+// (186: include retained tool calls in pull request links.)
+const dataVersion = 186
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -955,6 +957,8 @@ type DB struct {
 	afterSearchRead      func()
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
+	dashboardFlights     kept.Flights[dashboardPartsResult]
+	dashboardMemo        dashboardPartsMemo
 	usageKept            kept.Memo[DailyUsageResult]
 	usageFlights         kept.Flights[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
@@ -1894,9 +1898,12 @@ CREATE TABLE IF NOT EXISTS background_migrations (
     started_at      TEXT,
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     completed_at    TEXT
-);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL
+);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL + cursorAccountPollsSchemaSQL + `
+CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);`
 
 var exportIdentityColumnMigrations = []schemaColumnMigration{
+	{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
+	{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "session_id", "ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "source_archive_id", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_id TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "source_archive_salt", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_salt TEXT NOT NULL DEFAULT ''"},
@@ -1910,6 +1917,8 @@ var exportIdentityColumnMigrations = []schemaColumnMigration{
 }
 
 var exportIdentityUpgradeTables = map[string]struct{}{
+	"cursor_usage_events":                {},
+	"cursor_account_polls":               {},
 	"archive_metadata":                   {},
 	"background_migrations":              {},
 	"project_identity_observations":      {},
@@ -2123,6 +2132,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"cursor_account_polls",
 	"commit_trailers",
 	"commit_links",
 	"sessions",
@@ -2314,15 +2324,14 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
-	var missingAccountAgent bool
-	if err := conn.QueryRowContext(ctx, `SELECT
-		EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events')
-		AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = 'agent')`,
-	).Scan(&missingAccountAgent); err != nil {
-		return fmt.Errorf("checking account usage schema: %w", err)
-	}
-	if missingAccountAgent {
-		return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"}
+	for _, column := range []string{"agent", "account_user_id", "account_polled_at"} {
+		var missing bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = ?)`, column).Scan(&missing); err != nil {
+			return fmt.Errorf("checking account usage schema: %w", err)
+		}
+		if missing {
+			return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: column}
+		}
 	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
@@ -2421,6 +2430,12 @@ func probeDatabaseConn(ctx context.Context,
 	}
 	if version >= dataVersion {
 		return false, false, false, nil
+	}
+	if !archiveOnly && !fullRebuild {
+		providers := ScopedDataVersionProviders(version, dataVersion)
+		if providers != nil && len(providers) == 0 {
+			return false, false, false, nil
+		}
 	}
 	return false, countScoped || fullRebuild, fullRebuild, nil
 }
@@ -2547,6 +2562,8 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
+		{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
 		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},
@@ -2564,7 +2581,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "structured_pr_links",
 			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links",
 		},
-		{"sessions", "tool_pr_links", "ALTER TABLE sessions ADD COLUMN tool_pr_links TEXT NOT NULL DEFAULT ''"},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{
 			"sessions", "trash_includes_codex_pages",
@@ -3105,6 +3121,13 @@ CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_update AFTER UPDATE OF t
 WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
     UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
 END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_insert AFTER INSERT ON messages BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_update AFTER UPDATE OF content_length ON messages
+WHEN OLD.content_length IS NOT NEW.content_length BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
 `
 
 const toolsGenerationSchemaSQL = `
@@ -3408,7 +3431,6 @@ WHEN (
     OLD.cwd IS NOT NEW.cwd OR
     OLD.git_branch IS NOT NEW.git_branch OR
     OLD.structured_pr_links IS NOT NEW.structured_pr_links OR
-    OLD.tool_pr_links IS NOT NEW.tool_pr_links OR
     OLD.source_session_id IS NOT NEW.source_session_id OR
     OLD.source_version IS NOT NEW.source_version OR
     OLD.group_key IS NOT NEW.group_key OR
@@ -5478,6 +5500,8 @@ func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
 	return nil
 }
 
+const messageFTSProbe = "SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1"
+
 // checkFTSModuleLoads fails when messages_fts is in the schema but this
 // executable's SQLite cannot load its virtual table module. Writes to
 // messages fire triggers into messages_fts, so such an archive is
@@ -5485,7 +5509,7 @@ func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
 func (db *DB) checkFTSModuleLoads(
 	ctx context.Context, w *writerHandle,
 ) error {
-	_, err := w.ExecContext(ctx, "SELECT 1 FROM messages_fts LIMIT 1")
+	_, err := w.ExecContext(ctx, messageFTSProbe)
 	if err == nil {
 		return nil
 	}
@@ -5510,9 +5534,7 @@ func (db *DB) HasFTS(ctx context.Context) bool {
 	// sqlite_master but fail to load if the fts5 module is missing in the
 	// current runtime. A MATCH reads the index instead of scanning rows, and
 	// succeeds whether or not any row matches.
-	_, err := db.getReader().Exec(ctx,
-		"SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1",
-	)
+	_, err := db.getReader().Exec(ctx, messageFTSProbe)
 	return err == nil
 }
 

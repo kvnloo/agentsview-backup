@@ -700,9 +700,10 @@ AgentsView keeps one link per pull request. A bare PR number in a command needs
 a single known checkout remote. A command that changes that remote or runs
 `gh repo set-default` stops later bare numbers from linking. If GitHub CLI's
 default repository was set before the session began and differs from that
-remote, a bare number can link to the wrong repository. Archives that omitted tool inputs cannot recover
-links from those inputs. A prompt link tells you only that the prompt mentioned
-the pull request, not that the session worked on it. Claude Code also includes `pr-link` entries in its transcripts.
+remote, a bare number can link to the wrong repository. Archives that omitted
+tool inputs cannot recover links from those inputs. A prompt link tells you only
+that the prompt mentioned the pull request, not that the session worked on it.
+Claude Code also includes `pr-link` entries in its transcripts.
 Because Claude Code records these links for the whole transcript, every session
 split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.

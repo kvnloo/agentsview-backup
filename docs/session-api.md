@@ -678,7 +678,12 @@ ______________________________________________________________________
 
 Each session's `pr_links` field lists pull requests found in retained user
 prompts, supported `gh pr` commands, child-agent prompts, or structured
-transcript records:
+transcript records. The supported `gh pr` actions are `view`, `diff`, `checks`,
+`merge`, `edit`, `comment`, `review`, `ready`, `close`, `reopen`, `checkout`
+(or `co`), `update-branch`, `lock`, `unlock`, and `revert`. A command can name
+the pull request by number (with or without a leading `#`) or by URL, and can
+name its repository with `-R`, `--repo`, or `GH_REPO` as `owner/repo` or
+`host/owner/repo`. `-R` and `--repo` also accept a repository URL.
 
 ```json
 "pr_links": [
@@ -692,9 +697,10 @@ transcript records:
 ```
 
 AgentsView keeps one link per pull request. A bare PR number in a command needs
-a single known checkout remote. If GitHub CLI's default repository was set
-before the session began and differs from that remote, a bare number can link
-to the wrong repository. Archives that omitted tool inputs cannot recover
+a single known checkout remote. A command that changes that remote or runs
+`gh repo set-default` stops later bare numbers from linking. If GitHub CLI's
+default repository was set before the session began and differs from that
+remote, a bare number can link to the wrong repository. Archives that omitted tool inputs cannot recover
 links from those inputs. A prompt link tells you only that the prompt mentioned
 the pull request, not that the session worked on it. Claude Code also includes `pr-link` entries in its transcripts.
 Because Claude Code records these links for the whole transcript, every session

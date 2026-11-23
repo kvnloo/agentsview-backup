@@ -649,6 +649,11 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	if !usageOnly {
 		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged {
+			if replaceMessages && !db.ArchiveContent().OmitsToolContent() {
+				if err := writeToolPRLinksTx(queries, write.Session.ID, nil); err != nil {
+					return 0, err
+				}
+			}
 			if err := refreshSessionPromptPRLinksTx(ctx, queries, write.Session.ID); err != nil {
 				return 0, err
 			}

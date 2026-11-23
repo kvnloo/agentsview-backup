@@ -257,6 +257,13 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 				return nil, err
 			}
 		}
+		if d.ArchiveContent().OmitsToolContent() {
+			for _, id := range ids {
+				if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+					return nil, fmt.Errorf("indexing orphaned PR links before projection: %w", err)
+				}
+			}
+		}
 		if err := applyArchiveContentToCopiedSessionsTx(
 			ctx, tx, "_orphaned_ids", d.ArchiveContent(), sourceVersion,
 		); err != nil {
@@ -427,6 +434,13 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 	if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _trashed_ids)`); err != nil {
 			return nil, err
+		}
+	}
+	if d.ArchiveContent().OmitsToolContent() {
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+				return nil, fmt.Errorf("indexing trashed PR links before projection: %w", err)
+			}
 		}
 	}
 	if err := applyArchiveContentToCopiedSessionsTx(
@@ -2280,7 +2294,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"missing_verification_count",
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
-		"cwd", "git_branch", "pr_links", "structured_pr_links", "source_session_id",
+		"cwd", "git_branch", "pr_links", "structured_pr_links", "tool_pr_links", "source_session_id",
 		"source_version", "group_key", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"termination_status", "transcript_revision",

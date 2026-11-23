@@ -2178,6 +2178,11 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		}
 	}
 	if !db.usageOnlyStorage() {
+		if !db.ArchiveContent().OmitsToolContent() {
+			if err := writeToolPRLinksTx(tx, sessionID, nil); err != nil {
+				return err
+			}
+		}
 		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
@@ -2642,6 +2647,11 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		}
 	}
 	if !db.usageOnlyStorage() {
+		if !db.ArchiveContent().OmitsToolContent() {
+			if err := writeToolPRLinksTx(tx, sessionID, nil); err != nil {
+				return err
+			}
+		}
 		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}

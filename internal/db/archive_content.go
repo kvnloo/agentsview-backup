@@ -419,7 +419,7 @@ func clearUsageOnlyTextTx(
 	); err != nil {
 		return fmt.Errorf("clearing usage-only titles for %s: %w", sessionID, err)
 	}
-	if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND pr_links IS NOT structured_pr_links`, sessionID); err != nil {
+	if err := retainStructuredAndToolPRLinksTx(tx, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
@@ -437,6 +437,14 @@ func clearUsageOnlyTextTx(
 	}
 
 	return clearUsageOnlyConversationTx(tx, sessionID)
+}
+
+func retainStructuredAndToolPRLinksTx(tx transactionQueries, id string) error {
+	var stored, structured, tools string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
 }
 
 // settleUsageOnlySessionTx brings an existing session row that predates the
@@ -718,7 +726,7 @@ func compactCopiedSessionsForUsageTx(
 			UPDATE sessions
 			SET first_message = NULL, display_name = NULL,
 			    session_name = NULL, secret_leak_count = 0,
-			    secrets_rules_version = '', pr_links = structured_pr_links
+			    secrets_rules_version = ''
 			WHERE id` + inCopied},
 		{"pin notes", `
 			UPDATE pinned_messages SET note = NULL
@@ -740,6 +748,9 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
+		if err := retainStructuredAndToolPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			return err
+		}
 		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 			return err
 		}

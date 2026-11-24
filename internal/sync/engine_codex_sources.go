@@ -13,6 +13,22 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+// codexLabelRootSignature changes when a configured local root becomes readable.
+func codexLabelRootSignature(roots []string) string {
+	var available []string
+	for _, root := range roots {
+		if strings.HasPrefix(root, "s3://") {
+			available = append(available, root)
+			continue
+		}
+		if _, err := os.ReadDir(root); err == nil {
+			available = append(available, root)
+		}
+	}
+	slices.Sort(available)
+	return strings.Join(available, "\n")
+}
+
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
 // terms of a provider SourceFingerprint. For Codex, fingerprint MTimeNS folds
 // in session_index.jsonl via CodexEffectiveMtime; TraeX uses the transcript

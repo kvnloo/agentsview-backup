@@ -104,6 +104,40 @@ func TestCodexLabelRefreshMissingSignature(t *testing.T) {
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
+func TestCodexLabelRefreshAfterRootReturns(t *testing.T) {
+	database := openTestDB(t)
+	parent := t.TempDir()
+	root := filepath.Join(parent, "logs")
+	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	first := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+	t.Cleanup(first.Close)
+	require.Equal(t, 1, first.SyncAll(t.Context(), nil).Synced)
+	first.Close()
+	hidden := filepath.Join(parent, "temporarily-unavailable")
+	require.NoError(t, os.Rename(root, hidden))
+	other := filepath.Join(parent, "other")
+	const otherID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	otherSource := filepath.Join(other, "second", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+otherID+".jsonl")
+	dbtest.WriteTestFile(t, otherSource, []byte(testjsonl.CodexSessionMetaJSON(otherID, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, other}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Rename(hidden, root))
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	assert.Equal(t, 2, stats.Synced)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team", session.Project)
+	assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+}
+
 func TestCodexLabelRefreshMovedRoot(t *testing.T) {
 	database := openTestDB(t)
 	parent := t.TempDir()

@@ -1342,7 +1342,8 @@ fixtures retain this field; missing identities remain source-local.
   prefix in labels. Codex writes dated rollouts under the home's `sessions`
   directory and its `session_index.jsonl` beside that directory. The sandbox
   omits `--thread-source`, so Agentsview identifies parentless `codex_exec`
-  sessions in these homes as roborev runs from their path.
+  sessions in these homes as roborev runs from their path. A changed Codex root
+  causes the next sync to refresh labels for these runs.
 
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence of

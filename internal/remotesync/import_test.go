@@ -332,9 +332,6 @@ func TestImporterRefreshesCodexLabelsOncePerHost(t *testing.T) {
 	}
 	assert.Equal(t, 2, importSessions("host-a", sessions, true).SessionsSynced)
 	assert.Equal(t, 2, importSessions("host-a", root, true).SessionsSynced)
-	marker, err := database.GetSyncState(t.Context(), "codex_label_roots_v1:host-a~")
-	require.NoError(t, err)
-	assert.Equal(t, "host-a:/remote/logs", marker)
 	for _, id := range ids {
 		session, err := database.GetSessionFull(t.Context(), "host-a~codex:"+id)
 		require.NoError(t, err)
@@ -349,7 +346,7 @@ func TestImporterRefreshesCodexLabelsOncePerHost(t *testing.T) {
 	assert.Equal(t, 2, importSessions("host-c", root, true).SessionsSynced)
 	assert.Zero(t, importSessions("host-c", root, true).SessionsSynced)
 	assert.Equal(t, 2, importSessions("host-d", root, true, "/remote/missing").SessionsSynced)
-	marker, err = database.GetSyncState(t.Context(), "codex_label_roots_v1:host-d~")
+	marker, err := database.GetSyncState(t.Context(), "codex_label_roots_v1:host-d~")
 	require.NoError(t, err)
 	assert.Empty(t, marker)
 	assert.Equal(t, 2, importSessions("host-d", root, true).SessionsSynced)

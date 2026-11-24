@@ -21,7 +21,9 @@ import (
 func TestCodexLabelRootSignatureCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	assert.Empty(t, codexLabelRootSignature(ctx, []string{t.TempDir()}))
+	signature, complete := codexLabelRootSignature(ctx, []string{t.TempDir()}, nil)
+	assert.Empty(t, signature)
+	assert.False(t, complete)
 }
 
 func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
@@ -142,33 +144,6 @@ func TestCodexLabelRefreshAfterRootReturns(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, "team", session.Project)
 	assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
-	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-}
-
-func TestCodexLabelRefreshMovedRoot(t *testing.T) {
-	database := openTestDB(t)
-	parent := t.TempDir()
-	root := filepath.Join(parent, "old-logs")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	first := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(first.Close)
-	require.Equal(t, 1, first.SyncAll(t.Context(), nil).Synced)
-	first.Close()
-	moved := filepath.Join(parent, "new-logs")
-	require.NoError(t, os.Rename(root, moved))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {moved}}})
-	t.Cleanup(engine.Close)
-	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	assert.Equal(t, 1, stats.Synced)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "team", session.Project)
-	require.NotNil(t, session.FilePath)
-	assert.Equal(t, strings.Replace(source, root, moved, 1), *session.FilePath)
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 

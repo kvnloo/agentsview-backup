@@ -303,6 +303,58 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	assert.Contains(t, *full.FilePath, "devbox:/home/wes/.claude/projects/test-project/session.jsonl")
 }
 
+func TestImporterRefreshesCodexLabelsOncePerHost(t *testing.T) {
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	const root = "/remote/logs"
+	sessions := root + "/team/.codex-run-v1-abc/sessions"
+	ids := []string{"cccccccc-cccc-4ccc-8ccc-cccccccccccc", "dddddddd-dddd-4ddd-8ddd-dddddddddddd"}
+	bodies := make(map[string]string, len(ids))
+	for _, id := range ids {
+		bodies[id] = testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z") + "\n"
+	}
+	importSessions := func(host, target string, complete bool, extraRoots ...string) SyncStats {
+		t.Helper()
+		extracted := t.TempDir()
+		for _, id := range ids {
+			path := filepath.Join(remappedRemotePath(extracted, sessions), "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte(bodies[id]), 0o600))
+			mtime := time.Date(2026, 10, 8, 12, 0, 1, 0, time.UTC)
+			require.NoError(t, os.Chtimes(path, mtime, mtime))
+		}
+		roots := append([]string{target}, extraRoots...)
+		stats, err := (Importer{Host: host, DB: database, completeSourceMirror: complete}).ImportExtracted(t.Context(), TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentCodex: roots}}, extracted)
+		require.NoError(t, err)
+		require.Zero(t, stats.Failed)
+		return stats
+	}
+	assert.Equal(t, 2, importSessions("host-a", sessions, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-a", root, true).SessionsSynced)
+	marker, err := database.GetSyncState(t.Context(), "codex_label_roots_v1:host-a~")
+	require.NoError(t, err)
+	assert.Equal(t, "host-a:/remote/logs", marker)
+	for _, id := range ids {
+		session, err := database.GetSessionFull(t.Context(), "host-a~codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "team", session.Project)
+		assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
+	}
+	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-b", root, true).SessionsSynced)
+	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-c", root, false).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-c", root, true).SessionsSynced)
+	assert.Zero(t, importSessions("host-c", root, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-d", root, true, "/remote/missing").SessionsSynced)
+	marker, err = database.GetSyncState(t.Context(), "codex_label_roots_v1:host-d~")
+	require.NoError(t, err)
+	assert.Empty(t, marker)
+	assert.Equal(t, 2, importSessions("host-d", root, true).SessionsSynced)
+}
+
 func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {
 	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)

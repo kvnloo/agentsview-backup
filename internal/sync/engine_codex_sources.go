@@ -14,22 +14,28 @@ import (
 )
 
 // codexLabelRootSignature changes when a configured local root becomes readable.
-func codexLabelRootSignature(ctx context.Context, roots []string) string {
+func codexLabelRootSignature(ctx context.Context, roots []string, rewrite func(string) string) (string, bool) {
 	var available []string
+	complete := true
 	for _, root := range roots {
 		if ctx.Err() != nil {
-			return ""
+			return "", false
 		}
 		if strings.HasPrefix(root, "s3://") {
 			available = append(available, root)
 			continue
 		}
-		if _, err := os.ReadDir(root); err == nil {
-			available = append(available, root)
+		if _, err := os.ReadDir(root); err != nil {
+			complete = false
+			continue
 		}
+		if rewrite != nil {
+			root = rewrite(root)
+		}
+		available = append(available, root)
 	}
 	slices.Sort(available)
-	return strings.Join(available, "\n")
+	return strings.Join(available, "\n"), complete
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

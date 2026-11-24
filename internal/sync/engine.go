@@ -6345,8 +6345,13 @@ func (e *Engine) syncAllLocked(
 		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
 	labelRoots := slices.Clone(e.sources().agentDirs[parser.AgentCodex])
-	labelSignature := codexLabelRootSignature(ctx, labelRoots)
-	storedLabelSignature, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
+	remoteLabels := e.pathRewriter != nil && e.idPrefix != ""
+	labelKey := codexLabelRootsKey
+	if remoteLabels {
+		labelKey += ":" + e.idPrefix
+	}
+	labelSignature, labelComplete := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter)
+	storedLabelSignature, err := e.db.GetSyncState(ctx, labelKey)
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
 	}
@@ -6357,9 +6362,11 @@ func (e *Engine) syncAllLocked(
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
-		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() && codexLabelRootSignature(ctx, labelRoots) == labelSignature {
-			if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
-				log.Printf("persist Codex label roots: %v", err)
+		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() && (!remoteLabels || labelComplete) {
+			if finalSignature, finalComplete := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter); finalSignature == labelSignature && (!remoteLabels || finalComplete) {
+				if err := e.db.SetSyncState(ctx, labelKey, labelSignature); err != nil {
+					log.Printf("persist Codex label roots: %v", err)
+				}
 			}
 		}
 	}()
@@ -6770,7 +6777,7 @@ func (e *Engine) syncAllLocked(
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
 	}
-	labelPassComplete = scope == nil && !e.ephemeral && (wave == nil || !wave.partial)
+	labelPassComplete = scope == nil && (!e.ephemeral || remoteLabels && e.completeSourceMirror) && (wave == nil || !wave.partial)
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats

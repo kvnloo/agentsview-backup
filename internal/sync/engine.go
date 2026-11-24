@@ -6350,7 +6350,7 @@ func (e *Engine) syncAllLocked(
 	if remoteLabels {
 		labelKey += ":" + e.idPrefix
 	}
-	labelSignature, labelComplete := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter)
+	labelSignature := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter)
 	storedLabelSignature, err := e.db.GetSyncState(ctx, labelKey)
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
@@ -6362,8 +6362,8 @@ func (e *Engine) syncAllLocked(
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
-		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() && (!remoteLabels || labelComplete) {
-			if finalSignature, finalComplete := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter); finalSignature == labelSignature && (!remoteLabels || finalComplete) {
+		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() {
+			if finalSignature := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter); finalSignature == labelSignature {
 				if err := e.db.SetSyncState(ctx, labelKey, labelSignature); err != nil {
 					log.Printf("persist Codex label roots: %v", err)
 				}

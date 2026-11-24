@@ -2,9 +2,7 @@ package sync
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -6334,11 +6332,10 @@ func (e *Engine) syncAllLocked(
 	}
 	labelRoots := slices.Clone(e.sources().agentDirs[parser.AgentCodex])
 	slices.Sort(labelRoots)
-	encodedRoots, _ := json.Marshal(labelRoots)
-	labelSignature := fmt.Sprintf("%x", sha256.Sum256(encodedRoots))
-	storedLabelSignature, labelStateErr := e.db.GetSyncState(ctx, codexLabelRootsKey)
-	if labelStateErr != nil {
-		log.Printf("load Codex label roots: %v", labelStateErr)
+	labelSignature := strings.Join(labelRoots, "\n")
+	storedLabelSignature, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
+	if err != nil {
+		log.Printf("load Codex label roots: %v", err)
 	}
 	labelPassComplete := false
 	defer func() {
@@ -6347,7 +6344,7 @@ func (e *Engine) syncAllLocked(
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
-		if labelPassComplete && labelStateErr == nil && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() {
+		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() {
 			if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
 				log.Printf("persist Codex label roots: %v", err)
 			}
@@ -6402,7 +6399,7 @@ func (e *Engine) syncAllLocked(
 	providerFound, providerFailures := e.discoverProviderSources(
 		ctx, scope, preContainerStates,
 	)
-	if storedLabelSignature != labelSignature || labelStateErr != nil {
+	if scope == nil && storedLabelSignature != labelSignature {
 		for i := range providerFound {
 			file := &providerFound[i]
 			if file.Agent == parser.AgentCodex && parser.CodexSourceLabelForRoots(labelRoots, file.Path) != "" {

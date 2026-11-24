@@ -14,9 +14,12 @@ import (
 )
 
 // codexLabelRootSignature changes when a configured local root becomes readable.
-func codexLabelRootSignature(roots []string) string {
+func codexLabelRootSignature(ctx context.Context, roots []string) string {
 	var available []string
 	for _, root := range roots {
+		if ctx.Err() != nil {
+			return ""
+		}
 		if strings.HasPrefix(root, "s3://") {
 			available = append(available, root)
 			continue

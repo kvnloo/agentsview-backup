@@ -6420,9 +6420,17 @@ func (e *Engine) syncAllLocked(
 		ctx, scope, preContainerStates,
 	)
 	if scope == nil && storedLabelSignature != labelSignature {
+		previousRoots := strings.Split(storedLabelSignature, "\n")
 		for i := range providerFound {
 			file := &providerFound[i]
-			if file.Agent == parser.AgentCodex && parser.CodexSourceLabelForRoots(labelRoots, file.Path) != "" {
+			if file.Agent != parser.AgentCodex {
+				continue
+			}
+			path := file.Path
+			if e.pathRewriter != nil {
+				path = e.pathRewriter(path)
+			}
+			if parser.CodexSourceLabelForRoots(labelRoots, file.Path) != "" || parser.CodexSourceLabelForRoots(previousRoots, path) != "" {
 				file.ForceParse = true
 			}
 		}
@@ -6777,7 +6785,8 @@ func (e *Engine) syncAllLocked(
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
 	}
-	labelPassComplete = scope == nil && (!e.ephemeral || remoteLabels && e.completeSourceMirror) && (wave == nil || !wave.partial)
+	_, codexEnabled := e.sources().providerFactories[parser.AgentCodex]
+	labelPassComplete = codexEnabled && scope == nil && (!e.ephemeral || remoteLabels && e.completeSourceMirror) && (wave == nil || !wave.partial)
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats

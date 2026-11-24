@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -16,6 +17,12 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestCodexLabelRootSignatureCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.Empty(t, codexLabelRootSignature(ctx, []string{t.TempDir()}))
+}
 
 func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 	database := openTestDB(t)

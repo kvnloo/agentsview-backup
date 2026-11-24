@@ -6345,7 +6345,7 @@ func (e *Engine) syncAllLocked(
 		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
 	labelRoots := slices.Clone(e.sources().agentDirs[parser.AgentCodex])
-	labelSignature := codexLabelRootSignature(labelRoots)
+	labelSignature := codexLabelRootSignature(ctx, labelRoots)
 	storedLabelSignature, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
@@ -6357,7 +6357,7 @@ func (e *Engine) syncAllLocked(
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
-		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() && codexLabelRootSignature(labelRoots) == labelSignature {
+		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() && codexLabelRootSignature(ctx, labelRoots) == labelSignature {
 			if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
 				log.Printf("persist Codex label roots: %v", err)
 			}

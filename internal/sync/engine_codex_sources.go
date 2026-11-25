@@ -14,16 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func (e *Engine) prepareLabelReconciliation(ctx context.Context, agent parser.AgentType) error {
-	if e.sourceSyncErr != nil {
-		return e.sourceSyncErr
-	}
-	if agent == "" || agent == parser.AgentCodex {
-		return e.refreshCodexLabelRoots(ctx)
-	}
-	return nil
-}
-
 // refreshCodexLabelRoots marks changed labels for retry before recording the roots.
 func (e *Engine) refreshCodexLabelRoots(ctx context.Context) error {
 	if e.ephemeral || slices.Contains(e.sources().preserveAgents, parser.AgentCodex) {
@@ -62,8 +52,7 @@ func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []strin
 	var ids []string
 	for _, record := range records {
 		label := parser.CodexSourceLabelForRoots(current, record.FilePath)
-		if record.Trashed || record.SourceMissing ||
-			label == parser.CodexSourceLabelForRoots(previous, record.FilePath) {
+		if label == parser.CodexSourceLabelForRoots(previous, record.FilePath) {
 			continue
 		}
 		ids = append(ids, record.ID)

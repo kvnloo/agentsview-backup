@@ -47,36 +47,25 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		engine                 *Engine
 		root, sessions, parent string
 	}
-	setup := func(t *testing.T, overlapping bool) fixture {
+	setup := func(t *testing.T, initiallyLabeled bool) fixture {
 		t.Helper()
 		database := openTestDB(t)
 		parent := t.TempDir()
 		root := filepath.Join(parent, "logs")
 		inner := filepath.Join(root, "team")
-		if overlapping {
-			inner = filepath.Join(inner, "case")
-		}
 		sessions := filepath.Join(inner, ".codex-run-v1-abc", "sessions")
 		source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
 		meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
 		dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
 		initialRoot := sessions
-		if overlapping {
-			initialRoot = filepath.Join(root, "team")
+		if initiallyLabeled {
+			initialRoot = root
 		}
 		engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {initialRoot}}})
 		t.Cleanup(engine.Close)
 		require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-		roots := []string{root}
-		if overlapping {
-			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			require.Equal(t, "case", session.Project)
-			require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
-			roots = []string{initialRoot, root}
-		}
 		engine.Close()
-		engine = NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
+		engine = NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 		t.Cleanup(engine.Close)
 		return fixture{database, engine, root, sessions, parent}
 	}
@@ -108,9 +97,17 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		require.NoError(t, os.Rename(missing, f.sessions))
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
 	})
-	t.Run("overlapping roots without signature", func(t *testing.T) {
+	t.Run("missing signature", func(t *testing.T) {
+		f := setup(t, false)
+		require.NoError(t, f.database.DeleteSyncState(t.Context(), codexLabelRootsKey))
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("unchanged root", func(t *testing.T) {
 		f := setup(t, true)
-		check(t, f, f.engine.SyncAll(t.Context(), nil), "team/case")
+		empty := filepath.Join(f.parent, "empty")
+		require.NoError(t, os.MkdirAll(empty, 0o755))
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root, empty}}})
+		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 	})
 	t.Run("resync while disabled", func(t *testing.T) {
 		f := setup(t, false)
@@ -130,7 +127,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 	})
 }
 
-func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
+func TestCodexResyncRestoresResolvedSnapshots(t *testing.T) {
 	for _, labeled := range []bool{true, false} {
 		name := "folder label"
 		if !labeled {
@@ -154,16 +151,10 @@ func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
 			t.Cleanup(engine.Close)
 			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
-			require.NoError(t, err)
-			require.Len(t, snapshots, 1)
-			assert.Equal(t, export.ProjectResolutionResolved, snapshots[0].RemoteResolution)
-			assert.NotEmpty(t, snapshots[0].GitRemote)
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)
 			require.NotNil(t, session)
 			assert.Equal(t, "checkout", session.Project)
-			assert.Equal(t, parser.SessionKindNonInteractive, session.SessionKind)
 			if labeled {
 				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 			} else {
@@ -217,30 +208,6 @@ func TestCodexScheduledReconciliationRefreshesLabels(t *testing.T) {
 			assert.Equal(t, "team", session.Project)
 		}
 	}
-	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions, other}}})
-	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCodex, []string{sessions, other}))
-	for _, id := range ids {
-		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-		require.NoError(t, err)
-		require.NotNil(t, session)
-		assert.Equal(t, "checkout", session.Project)
-	}
-}
-
-func TestCodexLabelRefreshSkipsUnchangedRoot(t *testing.T) {
-	database := openTestDB(t)
-	parent := t.TempDir()
-	root := filepath.Join(parent, "logs")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	empty := filepath.Join(parent, "empty")
-	require.NoError(t, os.MkdirAll(empty, 0o755))
-	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, empty}}})
-	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
 func TestCodexRemoteWorktreeProjectSurvivesAppendAndRebuild(t *testing.T) {

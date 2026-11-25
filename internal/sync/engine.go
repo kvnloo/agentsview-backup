@@ -4309,8 +4309,13 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 	onProgress ProgressFunc,
 ) (SyncStats, int, passEpilogueEligibility, error) {
-	if err := e.prepareLabelReconciliation(ctx, agent); err != nil {
-		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, err
+	if e.sourceSyncErr != nil {
+		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, e.sourceSyncErr
+	}
+	if agent == "" || agent == parser.AgentCodex {
+		if err := e.refreshCodexLabelRoots(ctx); err != nil {
+			return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, err
+		}
 	}
 	e.reportProgress(onProgress, Progress{
 		Phase:  PhaseDiscovering,

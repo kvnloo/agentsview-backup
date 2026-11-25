@@ -4316,6 +4316,7 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	if agent == "" || agent == parser.AgentCodex {
 		var err error
 		if labelRoots, err = e.refreshCodexLabelRoots(ctx); err != nil {
+			e.setLastReconciliationResult(ReconciliationResult{Aborted: true})
 			return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, err
 		}
 	}

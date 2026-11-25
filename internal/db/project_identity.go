@@ -970,10 +970,11 @@ func writeSessionProjectIdentitySnapshotExec(
 }
 
 // RestoreSessionProjectsFromIdentitySnapshots resets current project labels to
-// resolved Git-backed parser-source snapshots. Full resync calls this after
-// copying snapshots from the old archive and before reapplying active worktree
-// mappings, so a missing checkout cannot replace resolved historical identity
-// with a basename fallback.
+// resolved Git-backed parser-source snapshots. It keeps freshly parsed Codex
+// source labels intact. Full resync calls this after copying snapshots from the
+// old archive and before reapplying active worktree mappings, so a missing
+// checkout cannot replace resolved historical identity with a basename
+// fallback.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	ctx context.Context,
 ) (int, error) {
@@ -998,10 +999,12 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		sessionID       string
 		previousProject string
 		currentProject  string
+		agent           string
+		sourcePath      string
 	}
 	var restores []projectRestore
 	rows, err := tx.QueryContext(ctx, `
-		SELECT s.id, s.project, snap.project
+		SELECT s.id, s.project, snap.project, s.agent, COALESCE(s.file_path, '')
 		FROM sessions s
 		JOIN session_project_identity_snapshots snap
 		  ON snap.session_id = s.id
@@ -1023,6 +1026,8 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			&restore.sessionID,
 			&restore.previousProject,
 			&restore.currentProject,
+			&restore.agent,
+			&restore.sourcePath,
 		); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf(
@@ -1043,36 +1048,35 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		)
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		UPDATE sessions
-		SET project = (
-			SELECT snap.project
-			FROM session_project_identity_snapshots snap
-			WHERE snap.session_id = sessions.id
-		)
-		WHERE sessions.deleted_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id)
-		  AND EXISTS (
-			SELECT 1
-			FROM session_project_identity_snapshots snap
-			WHERE snap.session_id = sessions.id
-			  AND snap.project != ''
-			  AND snap.remote_resolution = 'resolved'
-			  AND snap.git_remote != ''
-			  AND snap.project != sessions.project
-		)`)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"restoring session projects from identity snapshots: %w", err,
-		)
-	}
-	restored, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"counting restored session projects: %w", err,
-		)
-	}
+	kept := restores[:0]
 	for _, restore := range restores {
+		if CodexProjectIsSourceLabel(
+			restore.agent, restore.sourcePath, restore.previousProject,
+		) {
+			continue
+		}
+		kept = append(kept, restore)
+	}
+	var restored int64
+	for _, restore := range kept {
+		result, err := tx.ExecContext(ctx,
+			"UPDATE sessions SET project = ? WHERE id = ?",
+			restore.currentProject, restore.sessionID,
+		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"restoring session projects from identity snapshots: %w", err,
+			)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf(
+				"counting restored session projects: %w", err,
+			)
+		}
+		restored += count
+	}
+	for _, restore := range kept {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
 			ctx, tx, restore.sessionID,
 			[]string{restore.previousProject, restore.currentProject},

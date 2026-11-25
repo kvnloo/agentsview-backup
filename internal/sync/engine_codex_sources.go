@@ -2,7 +2,7 @@ package sync
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -36,9 +36,21 @@ func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []strin
 	var ids []string
 	for _, path := range paths {
 		label := parser.CodexSourceLabelForRoots(current, path)
-		if knownRoots && label == parser.CodexSourceLabelForRoots(previous, path) ||
-			!knownRoots && label == "" {
+		if knownRoots && label == parser.CodexSourceLabelForRoots(previous, path) {
 			continue
+		}
+		if !knownRoots && label == "" {
+			if !strings.Contains(filepath.ToSlash(path), "/.codex-run-v1-") {
+				continue
+			}
+			project, ok := e.db.GetProjectByAgentPath(
+				ctx, path, string(parser.AgentCodex),
+			)
+			if !ok || !db.CodexProjectIsSourceLabel(
+				string(parser.AgentCodex), path, project,
+			) {
+				continue
+			}
 		}
 		pathIDs, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))
 		if err != nil {

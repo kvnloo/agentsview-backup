@@ -108,7 +108,7 @@ func (r *repositoryProjectResolver) name(ctx context.Context, remote string) (re
 		if err := rows.Scan(&project, &root, &relationship, &recorded, &agent, &sourcePath); err != nil {
 			return name, err
 		}
-		if codexProjectIsSourceLabel(agent, sourcePath, project) {
+		if CodexProjectIsSourceLabel(agent, sourcePath, project) {
 			continue
 		}
 		if recorded != "" {
@@ -145,7 +145,9 @@ type repositoryProjectCandidate struct {
 	remote, agent, sourcePath string
 }
 
-func codexProjectIsSourceLabel(agent, sourcePath, project string) bool {
+// CodexProjectIsSourceLabel reports whether project is derived from a labeled
+// Codex run directory in sourcePath.
+func CodexProjectIsSourceLabel(agent, sourcePath, project string) bool {
 	if agent != string(parser.AgentCodex) || project == "" {
 		return false
 	}
@@ -204,7 +206,7 @@ func repositoryProjectCandidates(ctx context.Context, tx *sql.Tx, sessionID, pro
 }
 
 func (r *repositoryProjectResolver) resolve(ctx context.Context, c repositoryProjectCandidate) (repositoryProjectName, bool, error) {
-	if codexProjectIsSourceLabel(c.agent, c.sourcePath, c.currentProject) {
+	if CodexProjectIsSourceLabel(c.agent, c.sourcePath, c.currentProject) {
 		return repositoryProjectName{}, false, nil
 	}
 	mappings, ok := r.mappings[c.machine]

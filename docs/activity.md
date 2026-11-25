@@ -63,16 +63,19 @@ the same day and timezone. Usage rows that recur across related sessions are
 deduplicated before totaling, following the same rule the Usage page applies.
 
 Subagents include native child sessions and eligible `claude -p`, `codex exec`,
-or Grok headless runs. Claude Code `sdk-cli` workers qualify when their first
-real normalized prompt records `turnOrigin=sdk`, and a human origin wins over
-conflicting markers. A queued first prompt, missing or unknown origin, SDK
-library entrypoints, or an explicit provider kind blocks this inference. Human
-SDK conversations stay Interactive unless their prompts match an automation
-pattern, while known subagents keep that category even when their prompts match
-built-in or user `[automated]` patterns. Runs without a subagent relationship
-count as Automated when they carry a roborev tag, are Muse Personal background
-runs, or have a matching first prompt, and prompt matching requires one or fewer
-real user messages.
+or Grok headless runs. Muse Personal delegated browser runs
+(`runtime.browser_input`) and subagent runs (plain `runtime` opening with
+`[Subagent Context]`) are Subagents too; a subagent run links to the session
+named by its `Requester agent id`. Claude Code `sdk-cli` workers qualify when
+their first real normalized prompt records `turnOrigin=sdk`, and a human origin
+wins over conflicting markers. A queued first prompt, missing or unknown origin,
+SDK library entrypoints, or an explicit provider kind blocks this inference.
+Human SDK conversations stay Interactive unless their prompts match an
+automation pattern, while known subagents keep that category even when their
+prompts match built-in or user `[automated]` patterns. Runs without a subagent
+relationship count as Automated when they carry a roborev tag, are Muse Personal
+scheduled or upkeep runs, or have a matching first prompt, and prompt matching
+requires one or fewer real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and

@@ -64,9 +64,11 @@ deduplicated before totaling, following the same rule the Usage page applies.
 
 Subagents include native child sessions and eligible `claude -p`, `codex exec`,
 or Grok headless runs. Muse Personal delegated browser runs
-(`runtime.browser_input`) and subagent runs (plain `runtime` opening with
-`[Subagent Context]`) are Subagents too; a subagent run links to the session
-named by its `Requester agent id`. Claude Code `sdk-cli` workers qualify when
+(`runtime.browser_input`) and subagent runs are Subagents too. A subagent run is
+plain `runtime` whose first user message opens with the full banner
+`[Subagent Context] You are running as a subagent (depth N/M)`; it links to the
+session named by its `- Requester agent id:` field and stays parentless when
+that field is missing or ambiguous. Claude Code `sdk-cli` workers qualify when
 their first real normalized prompt records `turnOrigin=sdk`, and a human origin
 wins over conflicting markers. A queued first prompt, missing or unknown origin,
 SDK library entrypoints, or an explicit provider kind blocks this inference.

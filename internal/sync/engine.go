@@ -11121,7 +11121,8 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		for _, i := range indexes[id] {
 			sess := &batch[i].sess
-			if !e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
+			if db.CodexProjectIsSourceLabel(string(sess.Agent), sess.File.Path, snapshot.Project) ||
+				!e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
 				!e.snapshotRootContainsCwd(
 					snapshot.RootPath, sourceProjectPreservationCwd(batch[i]),
 				) {

@@ -148,17 +148,23 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 }
 
 func TestCodexLabelRefreshAfterNarrowingAndDisabledSync(t *testing.T) {
-	for _, mode := range []string{"narrow", "disabled", "assigned"} {
+	for _, mode := range []string{"narrow", "disabled", "assigned", "missing checkout"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			parent := t.TempDir()
 			root := filepath.Join(parent, "logs")
 			sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
 			cwd := filepath.Join(parent, "project")
-			require.NoError(t, os.MkdirAll(cwd, 0o755))
+			if mode != "missing checkout" {
+				require.NoError(t, os.MkdirAll(cwd, 0o755))
+			}
 			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 			source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+			meta := testjsonl.CodexSessionMetaJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z")
+			if mode == "missing checkout" {
+				meta = testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+			}
+			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 			t.Cleanup(engine.Close)
 			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
@@ -180,6 +186,8 @@ func TestCodexLabelRefreshAfterNarrowingAndDisabledSync(t *testing.T) {
 			require.NotNil(t, session)
 			if mode == "assigned" {
 				assert.Equal(t, "chosen", session.Project)
+			} else if mode == "missing checkout" {
+				assert.Equal(t, "api", session.Project)
 			} else {
 				assert.Equal(t, "project", session.Project)
 			}

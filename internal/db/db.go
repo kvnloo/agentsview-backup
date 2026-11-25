@@ -708,8 +708,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // canonical input_image blocks so image retention, offload, and image_text
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
-// (190: prevent older binaries from losing inferred parent clears.)
-const dataVersion = 190
+const dataVersion = 189
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -5452,7 +5451,6 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 	for _, name := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
-		"idx_messages_activity_timestamp",
 		"idx_messages_analytics_metadata",
 		"idx_tool_calls_session_tool_use",
 		"idx_tool_result_events_identity",

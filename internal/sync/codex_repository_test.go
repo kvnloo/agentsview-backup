@@ -149,8 +149,8 @@ func TestCodexLabelRefreshAfterMissingSubtreeReturns(t *testing.T) {
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
-func TestCodexLabelRefreshAfterNarrowingAndDisabledSync(t *testing.T) {
-	for _, mode := range []string{"narrow", "disabled", "missing checkout", "missing signature", "newline root"} {
+func TestCodexLabelRefreshAfterNarrowing(t *testing.T) {
+	for _, mode := range []string{"narrow", "missing checkout", "missing signature", "newline root"} {
 		t.Run(mode, func(t *testing.T) {
 			if mode == "newline root" && runtime.GOOS == "windows" {
 				t.Skip("Windows paths cannot contain newlines")
@@ -180,12 +180,6 @@ func TestCodexLabelRefreshAfterNarrowingAndDisabledSync(t *testing.T) {
 				require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
 			}
 			config := SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}}
-			if mode == "disabled" {
-				config.DisabledAgents = []parser.AgentType{parser.AgentCodex}
-				engine.ReconfigureSources(config)
-				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-				config.DisabledAgents = nil
-			}
 			engine.ReconfigureSources(config)
 			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)

@@ -189,6 +189,19 @@ func TestRepositoryProjectAttribution(t *testing.T) {
 	cleared, err := d.ClearSessionProjectAssignment(ctx, s.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "sample", cleared.Project)
+
+	labeled, labeledObs := repositorySession("labeled", "checkout", "https://example.com/team/checkout.git")
+	path := filepath.Join("/logs", "team", ".codex-run-v1-abc", "sessions", "rollout.jsonl")
+	labeled.FilePath = &path
+	require.NoError(t, d.UpsertSessionWithProjectIdentity(ctx, labeled, labeledObs, labeled.Project))
+	labeled.Project = "team"
+	require.NoError(t, d.UpsertSession(ctx, labeled))
+	_, err = d.RestoreSessionProjectsFromIdentitySnapshots(ctx, []string{"/logs"})
+	require.NoError(t, err)
+	got, err = d.GetSessionFull(ctx, labeled.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "team", got.Project)
 }
 
 func TestRepositoryProjectAttributionPreservesFolderRules(t *testing.T) {

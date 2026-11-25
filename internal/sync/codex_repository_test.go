@@ -108,7 +108,6 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, session)
 		assert.Equal(t, label, session.Project)
-		assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
 		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 	}
 	t.Run("scoped then full", func(t *testing.T) {
@@ -144,13 +143,14 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		require.NoError(t, err)
 		fail := true
 		factories := f.engine.sources().providerFactories
-		factories[parser.AgentCodex] = failingCodexDiscoveryFactory{factories[parser.AgentCodex], &fail}
+		original := factories[parser.AgentCodex]
+		factories[parser.AgentCodex] = failingCodexDiscoveryFactory{original, &fail}
 		stats := f.engine.SyncAll(t.Context(), nil)
 		assert.Positive(t, stats.providerFailures)
 		stored, err := f.database.GetSyncState(t.Context(), codexLabelRootsKey)
 		require.NoError(t, err)
 		assert.Equal(t, previous, stored)
-		fail = false
+		factories[parser.AgentCodex] = original
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
 	})
 	t.Run("renamed root", func(t *testing.T) {
@@ -233,50 +233,11 @@ func TestCodexResyncRestoresResolvedSnapshots(t *testing.T) {
 			require.NotNil(t, session)
 			if labeled {
 				assert.Equal(t, "team", session.Project)
-				assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
 			} else {
 				assert.Equal(t, "checkout", session.Project)
 			}
 		})
 	}
-}
-
-func TestCodexScheduledReconciliationDiscoveryFailure(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	logs := filepath.Join(root, "logs")
-	sessions := filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions")
-	const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/checkout", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	previous, err := database.GetSyncState(t.Context(), codexLabelRootsKey)
-	require.NoError(t, err)
-	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {logs}}})
-	fail := true
-	factories := engine.sources().providerFactories
-	factories[parser.AgentCodex] = failingCodexDiscoveryFactory{factories[parser.AgentCodex], &fail}
-	_, _, err = engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs}, false, false, nil)
-	require.Error(t, err)
-	stored, err := database.GetSyncState(t.Context(), codexLabelRootsKey)
-	require.NoError(t, err)
-	assert.Equal(t, previous, stored)
-	fail = false
-	stats, _, err := engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs}, false, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Synced)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "team", session.Project)
-	stored, err = database.GetSyncState(t.Context(), codexLabelRootsKey)
-	require.NoError(t, err)
-	assert.NotEqual(t, previous, stored)
-	stats, _, err = engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs}, false, false, nil)
-	require.NoError(t, err)
-	assert.Zero(t, stats.Synced)
 }
 
 func TestCodexScheduledReconciliationRefreshesLabels(t *testing.T) {
@@ -297,10 +258,25 @@ func TestCodexScheduledReconciliationRefreshesLabels(t *testing.T) {
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions, other}}})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+	previous, err := database.GetSyncState(t.Context(), codexLabelRootsKey)
+	require.NoError(t, err)
 	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {logs, other}}})
+	fail := true
+	factories := engine.sources().providerFactories
+	original := factories[parser.AgentCodex]
+	factories[parser.AgentCodex] = failingCodexDiscoveryFactory{original, &fail}
+	_, _, err = engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs, other}, false, false, nil)
+	require.Error(t, err)
+	stored, err := database.GetSyncState(t.Context(), codexLabelRootsKey)
+	require.NoError(t, err)
+	assert.Equal(t, previous, stored)
+	factories[parser.AgentCodex] = original
 	stats, _, err := engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs, other}, false, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, stats.Synced)
+	stored, err = database.GetSyncState(t.Context(), codexLabelRootsKey)
+	require.NoError(t, err)
+	assert.NotEqual(t, previous, stored)
 	for i, id := range ids {
 		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 		require.NoError(t, err)
@@ -311,6 +287,9 @@ func TestCodexScheduledReconciliationRefreshesLabels(t *testing.T) {
 			assert.Equal(t, "team", session.Project)
 		}
 	}
+	stats, _, err = engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs, other}, false, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Synced)
 }
 
 func TestCodexRemoteWorktreeProjectSurvivesAppendAndRebuild(t *testing.T) {

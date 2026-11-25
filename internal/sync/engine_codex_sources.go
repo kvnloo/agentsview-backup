@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 // codexLabelRootSignature changes when a configured local root becomes readable.
 func codexLabelRootSignature(ctx context.Context, roots []string, rewrite func(string) string) string {
-	var available []string
+	available := make([]string, 0, len(roots))
 	for _, root := range roots {
 		if ctx.Err() != nil {
 			return ""
@@ -33,7 +34,8 @@ func codexLabelRootSignature(ctx context.Context, roots []string, rewrite func(s
 		available = append(available, root)
 	}
 	slices.Sort(available)
-	return strings.Join(available, "\n")
+	signature, _ := json.Marshal(available)
+	return string(signature)
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

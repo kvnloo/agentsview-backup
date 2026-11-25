@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -676,7 +677,7 @@ func (e *Engine) refuseWriteInForceParse(op string) bool {
 // skip cache entries has already run on this database.
 const codexExecMigrationKey = "codex_exec_legacy_migration_v1"
 
-const codexLabelRootsKey = "codex_label_roots_v1"
+const codexLabelRootsKey = "codex_label_roots_v2"
 
 // visualStudioCopilotSkipMigrationKey is the pg_sync_state flag
 // that records whether the one-time cleanup of Visual Studio
@@ -6406,7 +6407,8 @@ func (e *Engine) syncAllLocked(
 		ctx, scope, preContainerStates,
 	)
 	if scope == nil && storedLabelSignature != labelSignature {
-		previousRoots := strings.Split(storedLabelSignature, "\n")
+		var previousRoots []string
+		knownRoots := json.Unmarshal([]byte(storedLabelSignature), &previousRoots) == nil
 		for i := range providerFound {
 			file := &providerFound[i]
 			if file.Agent != parser.AgentCodex {
@@ -6416,8 +6418,9 @@ func (e *Engine) syncAllLocked(
 			if e.pathRewriter != nil {
 				path = e.pathRewriter(path)
 			}
-			if parser.CodexSourceLabelForRoots(labelRoots, file.Path) != "" || parser.CodexSourceLabelForRoots(previousRoots, path) != "" ||
-				storedLabelSignature == "" && db.CodexProjectIsSourceLabel(string(file.Agent), file.Path, ".") {
+			label := parser.CodexSourceLabelForRoots(labelRoots, file.Path)
+			if knownRoots && label != parser.CodexSourceLabelForRoots(previousRoots, path) ||
+				!knownRoots && (label != "" || db.CodexProjectIsSourceLabel(string(file.Agent), file.Path, ".")) {
 				file.ForceParse = true
 			}
 		}
@@ -11046,7 +11049,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 			continue
 		}
 		sess := batch[i].sess
-		if db.CodexProjectIsSourceLabel(string(sess.Agent), sess.File.Path, sess.Project) {
+		if sess.Agent == parser.AgentCodex && sess.Project != "" && parser.CodexSourceLabelForRoots(e.sources().agentDirs[parser.AgentCodex], sess.File.Path) == sess.Project {
 			batch[i].sourceProjectResolved = true
 			continue
 		}

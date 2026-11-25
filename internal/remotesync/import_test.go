@@ -314,7 +314,7 @@ func TestImporterRefreshesCodexLabelsAfterCompleteMirror(t *testing.T) {
 	for _, id := range ids {
 		bodies[id] = testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z") + "\n"
 	}
-	importSessions := func(target string, complete bool) SyncStats {
+	importSessions := func(host, target string, complete bool) SyncStats {
 		t.Helper()
 		extracted := t.TempDir()
 		for _, id := range ids {
@@ -324,14 +324,14 @@ func TestImporterRefreshesCodexLabelsAfterCompleteMirror(t *testing.T) {
 			mtime := time.Date(2026, 10, 8, 12, 0, 1, 0, time.UTC)
 			require.NoError(t, os.Chtimes(path, mtime, mtime))
 		}
-		stats, err := (Importer{Host: "host-a", DB: database, completeSourceMirror: complete}).ImportExtracted(t.Context(), TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentCodex: {target}}}, extracted)
+		stats, err := (Importer{Host: host, DB: database, completeSourceMirror: complete}).ImportExtracted(t.Context(), TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentCodex: {target}}}, extracted)
 		require.NoError(t, err)
 		require.Zero(t, stats.Failed)
 		return stats
 	}
-	assert.Equal(t, 2, importSessions(sessions, true).SessionsSynced)
-	assert.Equal(t, 2, importSessions(root, false).SessionsSynced)
-	assert.Equal(t, 2, importSessions(root, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-a", sessions, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-a", root, false).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-a", root, true).SessionsSynced)
 	for _, id := range ids {
 		session, err := database.GetSessionFull(t.Context(), "host-a~codex:"+id)
 		require.NoError(t, err)
@@ -339,7 +339,18 @@ func TestImporterRefreshesCodexLabelsAfterCompleteMirror(t *testing.T) {
 		assert.Equal(t, "team", session.Project)
 		assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
 	}
-	assert.Zero(t, importSessions(root, true).SessionsSynced)
+	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-b", sessions, true).SessionsSynced)
+	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
+	assert.Equal(t, 2, importSessions("host-b", root, true).SessionsSynced)
+	assert.Zero(t, importSessions("host-b", root, true).SessionsSynced)
+	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
+	for _, id := range ids {
+		session, err := database.GetSessionFull(t.Context(), "host-b~codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "team", session.Project)
+	}
 }
 
 func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {

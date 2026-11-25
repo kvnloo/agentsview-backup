@@ -9502,6 +9502,9 @@ func (e *Engine) providerSourceLowerRanked(
 	agent parser.AgentType,
 	candidate parser.SourceRef,
 ) (bool, error) {
+	if isCodexFormatAgent(agent) && agent != parser.AgentCodex {
+		return false, nil
+	}
 	if _, ok := provider.(parser.ReconciliationSourceRanker); !ok {
 		return false, nil
 	}

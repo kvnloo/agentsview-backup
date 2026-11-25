@@ -82,6 +82,47 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 	}
 }
 
+func TestCodexLabelRefreshRetriesAfterProviderFailure(t *testing.T) {
+	database := openTestDB(t)
+	parent := t.TempDir()
+	root := filepath.Join(parent, "logs")
+	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	codex, ok := parser.ProviderFactoryByType(parser.AgentCodex)
+	require.True(t, ok)
+	newEngine := func(root string, factories ...parser.ProviderFactory) *Engine {
+		engine := NewEngine(t.Context(), database, EngineConfig{
+			Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}, parser.AgentWarp: {parent}},
+			ProviderFactories: factories,
+		})
+		t.Cleanup(engine.Close)
+		return engine
+	}
+	initial := newEngine(sessions, codex)
+	require.Equal(t, 1, initial.SyncAll(t.Context(), nil).Synced)
+	initial.Close()
+	warp, ok := parser.ProviderFactoryByType(parser.AgentWarp)
+	require.True(t, ok)
+	missing := filepath.Join(parent, "temporarily-unavailable")
+	require.NoError(t, os.Rename(sessions, missing))
+	failed := newEngine(root, codex, firstImportFailingFactory{&firstImportFailingProvider{warp.NewProvider(parser.ProviderConfig{})}})
+	stats := failed.SyncAll(t.Context(), nil)
+	require.Positive(t, stats.providerFailures)
+	failed.Close()
+	require.NoError(t, os.Rename(missing, sessions))
+	retry := newEngine(root, codex)
+	stats = retry.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team", session.Project)
+}
+
 func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 	database := openTestDB(t)
 	parent := t.TempDir()

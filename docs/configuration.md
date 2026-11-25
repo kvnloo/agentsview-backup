@@ -784,6 +784,8 @@ AgentsView reads without writing to or migrating the database.
 the label path as the project unless a worktree mapping matches the working
 directory.
 When Codex roots overlap, the outermost root determines the label.
+After expanding a Codex root to include labels, the next full or scheduled sync
+refreshes affected sessions.
 
 **Augure Code.** Augure Code reads Codex-format JSONL from
 `~/.augure/sessions/` and appears under the separate `augure-code` agent ID. To

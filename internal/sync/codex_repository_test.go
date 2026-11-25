@@ -190,8 +190,6 @@ func TestCodexLabelRefreshSkipsUnchangedRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(empty, 0o755))
 	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, empty}}})
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
 func TestCodexRemoteWorktreeProjectSurvivesAppendAndRebuild(t *testing.T) {

@@ -68,6 +68,10 @@ type ProviderConfig struct {
 	// SourceMachines labels configured roots with their source machine. A
 	// provider must treat roots owned by another machine as remote metadata.
 	SourceMachines map[string]string
+	// AssetsDir is the local content-addressed asset store. Providers that
+	// attach user images write them here and reference them as asset://
+	// links; an empty value keeps references without writing files.
+	AssetsDir string
 	// PathRewriter maps an on-disk source path to its canonical stored form.
 	// It is non-nil only during remote sync, where source files are read
 	// from a temporary extraction directory but must keep a stable identity

@@ -10,6 +10,7 @@ import { m } from "../../i18n/index.js";
 import { messages as messagesStore } from "../../stores/messages.svelte.js";
 import { claudeCodeLink } from "../../utils/claude.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
+import { CODEBUDDY_IDE_OPENER_IDS, codebuddyCanContinue } from "../../utils/codebuddy.js";
 import { codexDesktopLink } from "../../utils/codex.js";
 import { LatestRead } from "../../utils/latest-read.js";
 import {
@@ -60,7 +61,9 @@ export class SessionOpeners {
   readonly isLocal = $derived(!this.session?.id.includes("~"));
 
   readonly canLaunch = $derived(
-    this.session ? supportsResume(this.session.agent) && this.isLocal : false,
+    this.session
+      ? supportsResume(this.session.agent) && this.isLocal && codebuddyCanContinue(this.session)
+      : false,
   );
 
   readonly codexLink = $derived(
@@ -71,7 +74,9 @@ export class SessionOpeners {
     this.session?.agent === "claude" && this.isLocal ? claudeCodeLink(this.sessionDir) : null,
   );
 
-  readonly canCopyCommand = $derived(this.session ? supportsResume(this.session.agent) : false);
+  readonly canCopyCommand = $derived(
+    this.session ? supportsResume(this.session.agent) && codebuddyCanContinue(this.session) : false,
+  );
 
   readonly terminalOpeners = $derived(this.openers.filter((o) => o.kind === "terminal"));
 
@@ -79,6 +84,12 @@ export class SessionOpeners {
     this.session?.agent === "claude"
       ? (this.openers.find((o) => o.id === "claude-desktop") ?? null)
       : null,
+  );
+
+  readonly codebuddyIDEOpeners = $derived(
+    this.session?.agent === "codebuddy"
+      ? this.openers.filter((o) => CODEBUDDY_IDE_OPENER_IDS.has(o.id))
+      : [],
   );
 
   readonly editorOpeners = $derived(this.openers.filter((o) => o.kind === "editor"));

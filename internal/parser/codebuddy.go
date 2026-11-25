@@ -16,8 +16,9 @@ import (
 
 var codebuddyUserQueryRegex = regexp.MustCompile(`(?s)<user_query>(.*?)</user_query>`)
 
-// codebuddyDefaultDirs returns platform-specific default directories holding
-// CodeBuddyExtension data.
+// codebuddyDefaultDirs returns the default CodeBuddy roots: the IDE 4.x
+// CodeBuddyExtension data directories for each platform, then the CBC home
+// shared by CodeBuddy CLI and IDE 5.x.
 func codebuddyDefaultDirs() []string {
 	return []string{
 		// Windows
@@ -26,6 +27,8 @@ func codebuddyDefaultDirs() []string {
 		"Library/Application Support/CodeBuddyExtension/Data",
 		// Linux
 		".config/CodeBuddyExtension/Data",
+		// CodeBuddy CLI and IDE 5.x
+		".codebuddy/projects",
 	}
 }
 

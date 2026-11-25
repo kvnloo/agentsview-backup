@@ -1870,6 +1870,16 @@ func (s *Server) humaResumeSession(
 			return nil, internalError("resume identity", err)
 		}
 	}
+	if session.Agent == string(parser.AgentCodeBuddy) {
+		// The CLI resumes its runtime session, which an IDE conversation
+		// can name differently from the archive id.
+		runtimeID, ok := codebuddyResumeID(session)
+		if !ok {
+			return nil, apiError(http.StatusBadRequest,
+				"this CodeBuddy session has no CLI session to resume")
+		}
+		rawID = runtimeID
+	}
 	if s.db.ReadOnly() && !req.CommandOnly {
 		return nil, apiError(http.StatusNotImplemented,
 			"session launch not available in remote mode")
@@ -1910,7 +1920,7 @@ func (s *Server) humaResumeSession(
 	}
 	responseCmd := cmd
 	switch session.Agent {
-	case "claude", "kiro", "pi":
+	case "claude", "kiro", "pi", "codebuddy":
 		if host != "" {
 			responseCmd = commandWithDir(cmd, launchDir)
 		} else {
@@ -2042,6 +2052,9 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			},
 		}, nil
 	}
+	if scheme, ok := codebuddyIDEOpeners[opener.ID]; ok {
+		return s.openCodeBuddyIDEConversation(ctx, session, rawID, scheme, opener.Name, responseCmd, launchDir)
+	}
 	openerCwd := resumeLaunchCwd(
 		session.Agent, opener.ID, runtime.GOOS, launchDir,
 	)
@@ -2079,6 +2092,47 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			Cwd:      launchDir,
 		},
 	}, nil
+}
+
+// openCodeBuddyIDEConversation asks a CodeBuddy IDE build to open the IDE
+// conversation that owns the session's CLI runtime session.
+func (s *Server) openCodeBuddyIDEConversation(ctx context.Context,
+	session *db.Session, runtimeID, scheme, name, responseCmd, launchDir string,
+) (*jsonOutput[resumeResponse], error) {
+	failed := func(code string) (*jsonOutput[resumeResponse], error) {
+		return &jsonOutput[resumeResponse]{Body: resumeResponse{
+			Launched: false, Command: responseCmd, Cwd: launchDir, Error: code,
+		}}, nil
+	}
+	if session.Agent != string(parser.AgentCodeBuddy) || session.FilePath == nil {
+		return nil, apiError(http.StatusBadRequest,
+			"CodeBuddy IDE only opens CodeBuddy sessions")
+	}
+	conversationID, ok, err := parser.CodeBuddyIDEConversationID(ctx, *session.FilePath, runtimeID)
+	if err != nil {
+		log.Printf("resume: CodeBuddy catalog lookup failed: %v", err)
+		return failed("ide_conversation_unavailable")
+	}
+	link := ""
+	if ok {
+		link = codebuddyIDEConversationURL(scheme, conversationID)
+	}
+	if link == "" {
+		return failed("ide_conversation_unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// The opened IDE belongs to the user and outlives this request.
+	proc := openURLCommand(context.WithoutCancel(ctx), runtime.GOOS, link)
+	if err := proc.Start(); err != nil {
+		log.Printf("resume: %s launch failed: %v", name, err)
+		return failed("desktop_launch_failed")
+	}
+	go func() { _ = proc.Wait() }()
+	return &jsonOutput[resumeResponse]{Body: resumeResponse{
+		Launched: true, Terminal: name, Command: responseCmd, Cwd: launchDir,
+	}}, nil
 }
 
 func (s *Server) humaFileReferences(ctx context.Context, in *idPathInput) (*jsonOutput[service.FileReferencesResult], error) {

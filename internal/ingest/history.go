@@ -90,7 +90,7 @@ func ReconcileProviderHistory(
 	// shared Claude transcript layout for its CLI path, so an icodemate
 	// candidate can match both predicates; the file path (not the agent
 	// alone) decides which family this candidate belongs to.
-	if IsClaudeFormatTranscript(agent, candidate.Parsed.Session.File.Path) {
+	if RestoresPersistedToolResults(agent, candidate.Parsed.Session.File.Path) {
 		return reconcileClaudePersistedToolResults(
 			ctx, candidate, *prior, options, result,
 		)

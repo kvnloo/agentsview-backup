@@ -1,0 +1,586 @@
+package parser
+
+import (
+	"database/sql"
+	"encoding/base64"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+)
+
+// cbcHome lays out a CodeBuddy home with one project directory and returns
+// the home and the project directory.
+func cbcHome(t *testing.T) (home, project string) {
+	t.Helper()
+	home = t.TempDir()
+	project = filepath.Join(home, "projects", "-work-demo")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	return home, project
+}
+
+func writeCBC(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600))
+}
+
+func parseCBCHome(t *testing.T, roots ...string) []ParseResult {
+	t.Helper()
+	p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+		NewProvider(ProviderConfig{Roots: roots, Machine: "m"})
+	sources, err := p.Discover(t.Context())
+	require.NoError(t, err)
+	var out []ParseResult
+	for _, source := range sources {
+		outcome, err := p.Parse(t.Context(), ParseRequest{Source: source, Machine: "m"})
+		require.NoError(t, err)
+		for _, r := range outcome.Results {
+			out = append(out, r.Result)
+		}
+	}
+	return out
+}
+
+func cbcSession(t *testing.T, results []ParseResult, id string) ParseResult {
+	t.Helper()
+	for _, r := range results {
+		if r.Session.ID == id {
+			return r
+		}
+	}
+	require.Failf(t, "session not found", "%s", id)
+	return ParseResult{}
+}
+
+func TestCodeBuddyCBCConversation(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s1.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-1","cwd":"/work/demo","content":[{"type":"input_text","text":"<system-reminder data-role=\"user-context\">memory</system-reminder>"},{"type":"input_text","text":"List the files"}],"providerData":{"agent":"cli","conversationRequestId":"r1"}}`,
+		`{"id":"t1","type":"ai-title","aiTitle":"Listing files","timestamp":1001}`,
+		`{"id":"a1","parentId":"u1","type":"reasoning","timestamp":1002,"rawContent":[{"type":"reasoning_text","text":"I should run ls"}],"providerData":{"conversationRequestId":"r1","messageId":"m1","stepSeq":1,"model":"glm-x"}}`,
+		`{"id":"a2","parentId":"a1","type":"function_call","timestamp":1003,"name":"Bash","callId":"c1","arguments":"{\"command\":\"ls\"}","providerData":{"conversationRequestId":"r1","messageId":"m1","stepSeq":1,"model":"glm-x","rawUsage":{"prompt_tokens":100,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":60},"prompt_cache_miss_tokens":40,"cache_creation_input_tokens":0,"completion_thinking_tokens":12}}}`,
+		`{"id":"a3","parentId":"a2","type":"function_call_result","timestamp":1004,"name":"Bash","callId":"c1","status":"completed","output":{"type":"text","text":"a.go\nb.go"},"providerData":{"conversationRequestId":"r1","messageId":"m1"}}`,
+		`{"id":"a4","parentId":"a3","type":"message","role":"assistant","timestamp":1005,"status":"completed","content":[{"type":"output_text","text":"Two Go files."}],"providerData":{"conversationRequestId":"r1","messageId":"m2","stepSeq":2,"model":"glm-x","rawUsage":{"prompt_tokens":150,"completion_tokens":0,"prompt_tokens_details":{"cached_tokens":100}}}}`,
+		`{"id":"mu","parentId":"a4","type":"model-usage","timestamp":1006,"providerData":{"conversationRequestId":"r1","messageId":"m3","stepSeq":3,"model":"glm-x","rawUsage":{"prompt_tokens":10,"completion_tokens":5}}}`,
+		`{"id":"cu","parentId":"a4","type":"context-usage","timestamp":1007,"contextTokens":999}`,
+	)
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 1)
+	s := results[0].Session
+	assert.Equal(t, "codebuddy:s1", s.ID)
+	assert.Equal(t, "run-1", s.SourceSessionID)
+	assert.Equal(t, "Listing files", s.SessionName)
+	assert.Equal(t, "List the files", s.FirstMessage)
+	assert.Equal(t, "cli", s.Entrypoint)
+	assert.Equal(t, 1, s.UserMessageCount)
+
+	msgs := results[0].Messages
+	require.Len(t, msgs, 6)
+	assert.Equal(t, "system_reminder", msgs[0].SourceSubtype)
+	assert.True(t, msgs[0].IsSystem)
+	assert.Equal(t, "List the files", msgs[1].Content)
+
+	call := msgs[2]
+	assert.Equal(t, RoleAssistant, call.Role)
+	assert.Equal(t, "I should run ls", call.ThinkingText)
+	require.Len(t, call.ToolCalls, 1)
+	assert.Equal(t, "Bash", call.ToolCalls[0].ToolName)
+	assert.Equal(t, "cb:r1:m1:1", call.SourceUUID)
+	// prompt 100 = 60 cache reads + 40 uncached; reasoning is part of output.
+	assert.JSONEq(t, `{"input_tokens":40,"output_tokens":30,"cache_read_input_tokens":60,"cache_creation_input_tokens":0,"reasoning_tokens":12}`, string(call.TokenUsage))
+	assert.Equal(t, 100, call.ContextTokens)
+
+	require.Len(t, msgs[3].ToolResults, 1)
+	assert.Equal(t, "c1", msgs[3].ToolResults[0].ToolUseID)
+	assert.Equal(t, `"a.go\nb.go"`, msgs[3].ToolResults[0].ContentRaw)
+
+	reply := msgs[4]
+	assert.Equal(t, "Two Go files.", reply.Content)
+	assert.Equal(t, 0, reply.OutputTokens)
+	assert.True(t, reply.HasOutputTokens, "an explicit zero output is still reported")
+
+	usageOnly := msgs[5]
+	assert.True(t, usageOnly.IsSystem)
+	assert.Empty(t, usageOnly.Content)
+	assert.Equal(t, "cb:r1:m3:3", usageOnly.SourceUUID)
+	assert.Equal(t, 5, usageOnly.OutputTokens)
+}
+
+func TestCodeBuddyCBCResendBranches(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s2.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"first try"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"old answer"}]}`,
+		`{"id":"n1","type":"resend-fork-notice","timestamp":1002}`,
+		`{"id":"u2","type":"message","role":"user","timestamp":1003,"content":[{"type":"input_text","text":"second try"}]}`,
+		`{"id":"a2","parentId":"u2","type":"message","role":"assistant","timestamp":1004,"content":[{"type":"output_text","text":"new answer"}]}`,
+	)
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 2)
+	main := cbcSession(t, results, "codebuddy:s2")
+	require.Len(t, main.Messages, 2)
+	assert.Equal(t, "second try", main.Messages[0].Content)
+	assert.Equal(t, "new answer", main.Messages[1].Content)
+
+	fork := cbcSession(t, results, "codebuddy:s2-u1")
+	assert.Equal(t, "codebuddy:s2", fork.Session.ParentSessionID)
+	assert.Equal(t, RelFork, fork.Session.RelationshipType)
+	assert.Empty(t, fork.Session.SourceSessionID, "a preserved branch cannot be resumed")
+	require.Len(t, fork.Messages, 2)
+	assert.Equal(t, "old answer", fork.Messages[1].Content)
+}
+
+func TestCodeBuddyCBCPendingResendEndsAtNoticeParent(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s3.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"keep me"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"kept"}]}`,
+		`{"id":"u2","parentId":"a1","type":"message","role":"user","timestamp":1002,"content":[{"type":"input_text","text":"rewound"}]}`,
+		`{"id":"n1","parentId":"a1","type":"resend-fork-notice","timestamp":1003}`,
+	)
+	results := parseCBCHome(t, home)
+	main := cbcSession(t, results, "codebuddy:s3")
+	require.Len(t, main.Messages, 2)
+	assert.Equal(t, "kept", main.Messages[1].Content)
+	fork := cbcSession(t, results, "codebuddy:s3-u2")
+	assert.Equal(t, "rewound", fork.Messages[0].Content)
+}
+
+func TestCodeBuddyCBCParallelToolsStayOnePath(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s4.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"read both"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1001,"name":"Read","callId":"x","arguments":"{}","providerData":{"conversationRequestId":"r","messageId":"m"}}`,
+		`{"id":"c2","parentId":"c1","type":"function_call","timestamp":1002,"name":"Read","callId":"y","arguments":"{}","providerData":{"conversationRequestId":"r","messageId":"m"}}`,
+		`{"id":"r1","parentId":"c2","type":"function_call_result","timestamp":1003,"name":"Read","callId":"x","output":"one"}`,
+		`{"id":"r2","parentId":"r1","type":"function_call_result","timestamp":1004,"name":"Read","callId":"y","output":"two"}`,
+	)
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 1, "parallel calls are not a user branch")
+	msgs := results[0].Messages
+	require.Len(t, msgs, 4)
+	assert.Len(t, msgs[1].ToolCalls, 2, "calls of one response merge into one message")
+}
+
+func TestCodeBuddyCBCUserClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, providerData string
+		wantPrompt, wantSubtype     string
+	}{
+		{"query wrapper", `[{"type":"input_text","text":"<user_query>fix it</user_query>"}]`, `{}`, "fix it", ""},
+		{"quoted query stays", `[{"type":"input_text","text":"note <user_query>old</user_query> here"}]`, `{}`, "note <user_query>old</user_query> here", ""},
+		{"slash command", `[{"type":"input_text","text":"<command-name>/goal</command-name><command-args>ship</command-args>"}]`, `{}`, "/goal ship", ""},
+		{"bash input", `[{"type":"input_text","text":"<bash-input>ls</bash-input>"}]`, `{}`, "! ls", ""},
+		{"teammate", `[{"type":"input_text","text":"<teammate-message teammate_id=\"lead\">done</teammate-message>"}]`, `{}`, "", "peer_message"},
+		{"task notification", `[{"type":"input_text","text":"<task-notification>finished</task-notification>"}]`, `{}`, "", "task_notification"},
+		{"compact summary", `[{"type":"input_text","text":"<cb_summary>earlier work</cb_summary>"}]`, `{}`, "", "compact_boundary"},
+		{"aborted turn", `[{"type":"input_text","text":"stopped"}]`, `{"turnAborted":true}`, "", "interrupted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, project := cbcHome(t)
+			writeCBC(t, filepath.Join(project, "s.jsonl"),
+				`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":`+tc.content+`,"providerData":`+tc.providerData+`}`,
+				`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"ok"}]}`,
+			)
+			results := parseCBCHome(t, home)
+			require.Len(t, results, 1)
+			first := results[0].Messages[0]
+			if tc.wantSubtype == "" {
+				assert.False(t, first.IsSystem)
+				assert.Equal(t, tc.wantPrompt, first.Content)
+				assert.Equal(t, tc.wantPrompt, results[0].Session.FirstMessage)
+				return
+			}
+			assert.True(t, first.IsSystem)
+			assert.Equal(t, tc.wantSubtype, first.SourceSubtype)
+			assert.Equal(t, 0, results[0].Session.UserMessageCount)
+		})
+	}
+}
+
+// cbcPNG is a 1x1 PNG.
+const cbcPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+func TestCodeBuddyCBCImagesReadOnlyFromBlobStore(t *testing.T) {
+	home, project := cbcHome(t)
+	png, err := base64.StdEncoding.DecodeString(cbcPNG)
+	require.NoError(t, err)
+	blob := strings.Repeat("ab", 32)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "blobs", "ab"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "blobs", "ab", blob+".png"), png, 0o600))
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	require.NoError(t, os.WriteFile(outside, png, 0o600))
+	writeCBC(t, filepath.Join(project, "s5.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"what is this"},{"type":"image_blob_ref","blob_id":"`+blob+`","mime":"image/png","original_filename":"shot.png"},{"type":"image_blob_ref","blob_id":"../../x","blob_path":"`+filepath.ToSlash(outside)+`","original_filename":"escape.png"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"a pixel"}]}`,
+	)
+	assetsDir := t.TempDir()
+	p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+		NewProvider(ProviderConfig{Roots: []string{home}, Machine: "m", AssetsDir: assetsDir})
+	sources, err := p.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := p.Parse(t.Context(), ParseRequest{Source: sources[0], Machine: "m"})
+	require.NoError(t, err)
+	prompt := outcome.Results[0].Result.Messages[0].Content
+	assert.Contains(t, prompt, "what is this")
+	assert.Contains(t, prompt, "![image](asset://")
+	assert.Contains(t, prompt, "[image unavailable: escape.png]")
+	stored, err := os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	assert.Len(t, stored, 1, "only the blob-store image is copied")
+}
+
+func TestCodeBuddyCBCPersistedToolOutput(t *testing.T) {
+	home, project := cbcHome(t)
+	own := filepath.Join(project, "s6", "tool-results", "c1.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(own), 0o755))
+	require.NoError(t, os.WriteFile(own, []byte("full output body"), 0o600))
+	other := filepath.Join(project, "other", "tool-results", "c2.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(other), 0o755))
+	require.NoError(t, os.WriteFile(other, []byte("someone else's"), 0o600))
+	placeholder := func(path string) string {
+		return `"<persisted-output>\nOutput too large (1KB). Full output saved to: ` + filepath.ToSlash(path) + `\n</persisted-output>"`
+	}
+	writeCBC(t, filepath.Join(project, "s6.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"go"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1001,"name":"Bash","callId":"c1","arguments":"{}"}`,
+		`{"id":"r1","parentId":"c1","type":"function_call_result","timestamp":1002,"name":"Bash","callId":"c1","output":`+placeholder(own)+`}`,
+		`{"id":"c2","parentId":"r1","type":"function_call","timestamp":1003,"name":"Bash","callId":"c2","arguments":"{}"}`,
+		`{"id":"r2","parentId":"c2","type":"function_call_result","timestamp":1004,"name":"Bash","callId":"c2","output":`+placeholder(other)+`}`,
+		`{"id":"c3","parentId":"r2","type":"function_call","timestamp":1005,"name":"Read","callId":"c3","arguments":"{}"}`,
+		`{"id":"r3","parentId":"c3","type":"function_call_result","timestamp":1006,"name":"Read","callId":"c3","output":"1: log quoting <persisted-output> Full output saved to: /nowhere.txt"}`,
+	)
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 1)
+	var got []ParsedToolResult
+	for _, m := range results[0].Messages {
+		got = append(got, m.ToolResults...)
+	}
+	require.Len(t, got, 3)
+	assert.Equal(t, `"full output body"`, got[0].ContentRaw)
+	assert.False(t, got[0].PersistedOutputUnresolved)
+	assert.Contains(t, got[1].ContentRaw, "persisted-output", "another session's side file is never read")
+	assert.True(t, got[1].PersistedOutputUnresolved)
+	assert.False(t, got[2].PersistedOutputUnresolved, "quoted placeholder text is ordinary output")
+}
+
+func TestCodeBuddyCBCAskUserAnswerIsDialogue(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s7.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"set it up"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1001,"name":"AskUserQuestion","callId":"q","arguments":"{}"}`,
+		`{"id":"r1","parentId":"c1","type":"function_call_result","timestamp":1002,"name":"AskUserQuestion","callId":"q","output":{"type":"text","text":" · Which path? → /srv/app\n · Include samples? → yes"}}`,
+	)
+	results := parseCBCHome(t, home)
+	msgs := results[0].Messages
+	require.Len(t, msgs, 3)
+	answer := msgs[2]
+	assert.False(t, answer.IsSystem)
+	assert.Equal(t, "ask_user_answer", answer.SourceSubtype)
+	assert.Equal(t, "[Answer: Which path?] /srv/app\n[Answer: Include samples?] yes", answer.Content)
+	assert.Equal(t, 2, results[0].Session.UserMessageCount)
+}
+
+func TestCodeBuddyCBCSubagentLinks(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s8.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"delegate"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1001,"name":"Agent","callId":"t1","arguments":"{\"prompt\":\"look\"}"}`,
+		`{"id":"r1","parentId":"c1","type":"function_call_result","timestamp":1002,"name":"Agent","callId":"t1","output":"found it","providerData":{"toolResult":{"subAgent":{"sessionId":"agent-7"}}}}`,
+	)
+	writeCBC(t, filepath.Join(project, "s8", "subagents", "agent-7.jsonl"),
+		`{"id":"su","type":"message","role":"user","timestamp":1001,"content":[{"type":"input_text","text":"look"}]}`,
+		`{"id":"sa","parentId":"su","type":"message","role":"assistant","timestamp":1002,"content":[{"type":"output_text","text":"found it"}]}`,
+	)
+	results := parseCBCHome(t, home)
+	parent := cbcSession(t, results, "codebuddy:s8")
+	assert.Equal(t, "codebuddy:s8:subagent:agent-7", parent.Messages[1].ToolCalls[0].SubagentSessionID)
+	child := cbcSession(t, results, "codebuddy:s8:subagent:agent-7")
+	assert.Equal(t, "codebuddy:s8", child.Session.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.Session.RelationshipType)
+}
+
+func TestCodeBuddyCBCTruncatedTailAndEmptyFiles(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "meta.jsonl"),
+		`{"type":"session-meta","id":"m","sessionId":"meta","meta":{}}`)
+	full := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hello"}]}` + "\n" +
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hi"}]}` + "\n" +
+		`{"id":"bad"` + "\n" +
+		`{"id":"a2","parentId":"a1","type":"mess`
+	require.NoError(t, os.WriteFile(filepath.Join(project, "tail.jsonl"), []byte(full), 0o600))
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 1, "a transcript with only metadata yields no session")
+	s := results[0].Session
+	assert.True(t, s.IsTruncated)
+	assert.Equal(t, 1, s.MalformedLines, "the cut-off tail is an in-progress write")
+	assert.Len(t, results[0].Messages, 2)
+}
+
+func TestCodeBuddyCBCTitles(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"custom beats ai", []string{
+			`{"id":"x1","type":"ai-title","aiTitle":"Generated","timestamp":2}`,
+			`{"id":"x2","type":"custom-title","customTitle":"Mine","timestamp":1}`,
+		}, "Mine"},
+		{"placeholder ai falls back to topic", []string{
+			`{"id":"x1","type":"ai-title","aiTitle":"(No content)","timestamp":2}`,
+			`{"id":"x2","type":"topic","topic":"Topic title","timestamp":1}`,
+		}, "Topic title"},
+		{"newest ai wins", []string{
+			`{"id":"x1","type":"ai-title","aiTitle":"Later","timestamp":5}`,
+			`{"id":"x2","type":"ai-title","aiTitle":"Earlier","timestamp":3}`,
+		}, "Later"},
+		{"first input when untitled", nil, "a question"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, project := cbcHome(t)
+			lines := append([]string{
+				`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"a question"}]}`,
+				`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"an answer"}]}`,
+			}, tc.lines...)
+			writeCBC(t, filepath.Join(project, "s.jsonl"), lines...)
+			results := parseCBCHome(t, home)
+			assert.Equal(t, tc.want, results[0].Session.SessionName)
+		})
+	}
+}
+
+const cbcCatalogSchema = `
+CREATE TABLE conversations (id TEXT PRIMARY KEY, workspace_authority TEXT,
+  title TEXT NOT NULL DEFAULT '', custom_title TEXT, runtime_provider TEXT,
+  runtime_session_id TEXT, fork_source_id TEXT, deleted_at INTEGER,
+  archived_at INTEGER);
+CREATE TABLE conversation_runtime_sources (authority TEXT NOT NULL,
+  runtime_session_id TEXT NOT NULL, conversation_id TEXT NOT NULL);
+CREATE TABLE btw_entries (conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+CREATE TABLE discussion_threads (conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+`
+
+// writeCBCCatalog applies statements to the home's catalog, creating it with
+// the columns the reader uses on first call.
+func writeCBCCatalog(t *testing.T, home string, statements ...string) {
+	t.Helper()
+	path := filepath.Join(home, CodeBuddyCatalogDBName)
+	_, statErr := os.Stat(path)
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer db.Close()
+	if os.IsNotExist(statErr) {
+		_, err = db.ExecContext(t.Context(), cbcCatalogSchema)
+		require.NoError(t, err)
+	}
+	for _, stmt := range statements {
+		_, err := db.ExecContext(t.Context(), stmt)
+		require.NoError(t, err)
+	}
+}
+
+func TestCodeBuddyCBCCatalogMetadata(t *testing.T) {
+	home, project := cbcHome(t)
+	for _, id := range []string{"run-a", "run-b"} {
+		writeCBC(t, filepath.Join(project, id+".jsonl"),
+			`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"`+id+`","content":[{"type":"input_text","text":"hi `+id+`"}]}`,
+			`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}]}`,
+			`{"id":"t1","type":"ai-title","aiTitle":"Transcript title","timestamp":1002}`,
+		)
+	}
+	writeCBCCatalog(t, home,
+		`INSERT INTO conversations (id, title, custom_title, runtime_session_id) VALUES ('conv-a', 'Catalog title', 'Renamed', 'run-a')`,
+		`INSERT INTO conversations (id, title, fork_source_id) VALUES ('conv-b', 'Forked', 'conv-a')`,
+		`INSERT INTO conversation_runtime_sources VALUES ('', 'run-b', 'conv-b')`,
+		`INSERT INTO conversations (id, workspace_authority, title, runtime_session_id) VALUES ('remote', 'ssh-host', 'Remote', 'run-c')`,
+		`INSERT INTO btw_entries VALUES ('conv-a', '[{"id":"b1","question":"side q","answer":"side a","createdAt":2000},{"id":"b2","question":"with pics","status":"error","error":"quota","imageCount":2,"createdAt":3000}]')`,
+		`INSERT INTO discussion_threads VALUES ('conv-a', '[{"id":"d1","anchor":{"quote":"hello","messageId":"a1"},"createdAt":2500,"entries":[{"id":"e1","question":"why?","answer":"because","createdAt":2500}]}]')`,
+	)
+	results := parseCBCHome(t, home)
+	a := cbcSession(t, results, "codebuddy:run-a")
+	assert.Equal(t, "Renamed", a.Session.SessionName, "a custom catalog title wins")
+	b := cbcSession(t, results, "codebuddy:run-b")
+	assert.Equal(t, "Forked", b.Session.SessionName, "the IDE title beats the generated transcript title")
+	assert.Equal(t, "codebuddy:run-a", b.Session.ParentSessionID, "the fork parent resolves to its runtime session")
+	assert.Equal(t, RelFork, b.Session.RelationshipType)
+
+	btw := cbcSession(t, results, "codebuddy:run-a:btw")
+	assert.Equal(t, "btw", btw.Session.SessionKind)
+	assert.Equal(t, "codebuddy:run-a", btw.Session.ParentSessionID)
+	require.Len(t, btw.Messages, 4)
+	assert.Equal(t, "side a", btw.Messages[1].Content)
+	assert.Contains(t, btw.Messages[2].Content, "2 image(s) attached; CodeBuddy did not store them")
+	assert.Equal(t, "[Side question failed] quota", btw.Messages[3].Content)
+	assert.True(t, btw.Messages[3].IsSystem)
+
+	discussion := cbcSession(t, results, "codebuddy:run-a:discussion:d1")
+	assert.Equal(t, "discussion_anchor", discussion.Messages[0].SourceSubtype)
+	assert.Equal(t, "> hello", discussion.Messages[0].Content)
+	for _, r := range results {
+		assert.NotEqual(t, "Remote", r.Session.SessionName, "remote workspace rows are not local sessions")
+	}
+}
+
+func clearCodeBuddyCatalogCache() {
+	codebuddyCatalogCache.Lock()
+	clear(codebuddyCatalogCache.byPath)
+	codebuddyCatalogCache.Unlock()
+}
+
+func TestCodeBuddyCBCCatalogChangeSelectsChangedRows(t *testing.T) {
+	for _, unrelated := range []int{1, 50} {
+		home, project := cbcHome(t)
+		ids := []string{"target"}
+		for i := range unrelated {
+			ids = append(ids, "other-"+strings.Repeat("x", i+1))
+		}
+		var stmts []string
+		for _, id := range ids {
+			writeCBC(t, filepath.Join(project, id+".jsonl"),
+				`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"`+id+`","content":[{"type":"input_text","text":"hi"}]}`)
+			stmts = append(stmts, "INSERT INTO conversations (id, title, runtime_session_id) VALUES ('c-"+id+"', 'T', '"+id+"')")
+		}
+		writeCBCCatalog(t, home, stmts...)
+		catalog := filepath.Join(home, CodeBuddyCatalogDBName)
+		set := newCodeBuddyCBCSourceSet([]string{filepath.Join(home, "projects")}, "")
+		req := ChangedPathRequest{Path: catalog, WatchRoot: home}
+		first, err := set.SourcesForChangedPath(t.Context(), req)
+		require.NoError(t, err)
+		assert.Len(t, first, len(ids), "without an earlier read every session is a candidate")
+
+		writeCBCCatalog(t, home, `UPDATE conversations SET custom_title = 'Renamed' WHERE runtime_session_id = 'target'`)
+		changed, err := set.SourcesForChangedPath(t.Context(), req)
+		require.NoError(t, err)
+		require.Len(t, changed, 1, "with %d unrelated sessions", unrelated)
+		assert.Equal(t, filepath.Join(project, "target.jsonl"), changed[0].DisplayPath)
+
+		again, err := set.SourcesForChangedPath(t.Context(), req)
+		require.NoError(t, err)
+		assert.Empty(t, again, "an unchanged catalog selects nothing")
+	}
+}
+
+func TestCodeBuddyCBCStatHashFollowsOwnCatalogRow(t *testing.T) {
+	home, project := cbcHome(t)
+	for _, id := range []string{"mine", "theirs"} {
+		writeCBC(t, filepath.Join(project, id+".jsonl"),
+			`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"`+id+`","content":[{"type":"input_text","text":"hi"}]}`)
+	}
+	writeCBCCatalog(t, home,
+		`INSERT INTO conversations (id, title, runtime_session_id) VALUES ('c1', 'Mine', 'mine')`,
+		`INSERT INTO conversations (id, title, runtime_session_id) VALUES ('c2', 'Theirs', 'theirs')`,
+	)
+	// The engine probes with a rootless provider.
+	probe, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	path := filepath.Join(project, "mine.jsonl")
+	before := probe.ComputeMultiFileStatHash(path)
+	require.NotZero(t, before)
+
+	writeCBCCatalog(t, home, `UPDATE conversations SET title = 'Other rename' WHERE id = 'c2'`)
+	clearCodeBuddyCatalogCache()
+	assert.Equal(t, before, probe.ComputeMultiFileStatHash(path), "another conversation's row does not invalidate this one")
+
+	writeCBCCatalog(t, home, `UPDATE conversations SET custom_title = 'Renamed' WHERE id = 'c1'`)
+	clearCodeBuddyCatalogCache()
+	assert.NotEqual(t, before, probe.ComputeMultiFileStatHash(path))
+}
+
+func TestCodeBuddyRootsSplitByLayout(t *testing.T) {
+	both := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(both, "history"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(both, "projects"), 0o755))
+	catalogOnly := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(catalogOnly, CodeBuddyCatalogDBName), nil, 0o600))
+	legacyOnly := t.TempDir()
+	projects := filepath.Join(t.TempDir(), "projects")
+
+	legacy, cbc := splitCodeBuddyRoots([]string{both, catalogOnly, legacyOnly, projects})
+	assert.Equal(t, []string{both, legacyOnly}, legacy)
+	assert.Equal(t, []string{
+		filepath.Join(both, "projects"), filepath.Join(catalogOnly, "projects"), projects,
+	}, cbc)
+}
+
+func TestCodeBuddyConvertedSessionUsesCBCAndLegacyUsage(t *testing.T) {
+	home, project := cbcHome(t)
+	legacyRoot := t.TempDir()
+	// history/<md5("/work/demo")>/<id>/
+	convDir := filepath.Join(legacyRoot, "user", "CodeBuddyIDE", "history", "11dd9429831578384393182ae89b24ff", "conv1")
+	require.NoError(t, os.MkdirAll(filepath.Join(convDir, "messages"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(convDir, "assets"), 0o755))
+	png, err := base64.StdEncoding.DecodeString(cbcPNG)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "assets", "pic.png"), png, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "index.json"), []byte(`{"messages":[{"id":"u1","role":"user"},{"id":"a1","role":"assistant"},{"id":"a9","role":"assistant"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "u1.json"), []byte(`{"role":"user","message":{"content":[{"type":"text","text":"old prompt"}]}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "a1.json"), []byte(`{"role":"assistant","createdAt":"2026-01-01T00:00:02Z","extra":{"requestId":"req1","modelId":"luna","lastStepInputTokens":90,"statsSnapshot":{"inputTokens":300,"outputTokens":40,"cachedInputTokens":200,"cacheWriteTokens":60,"thinkingTokens":10}},"message":{"content":[{"type":"text","text":"done"}]}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "a9.json"), []byte(`{"role":"assistant","createdAt":"2026-01-01T00:00:09Z","extra":{"requestId":"req2","statsSnapshot":{"inputTokens":50,"outputTokens":5}},"message":{"content":[{"type":"text","text":"gone"}]}}`), 0o600))
+
+	writeCBC(t, filepath.Join(project, "conv1.jsonl"),
+		`{"type":"session-meta","id":"conv1-session-meta","sessionId":"conv1","meta":{"codebuddy.ai/converterVersion":"ide-main-craft-jsonl/29"},"cwd":"/work/demo"}`,
+		`{"id":"u1","type":"message","role":"user","timestamp":1767225601000,"cwd":"/work/demo","content":[{"type":"input_text","text":"old prompt"},{"type":"input_image","image":"codebuddy-asset://assets/pic.png"},{"type":"input_image","image":"codebuddy-asset://assets/../escape.png"}],"providerData":{"agent":"codebuddy-ide-4.x"}}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1767225602000,"content":[{"type":"output_text","text":"done"}],"providerData":{"agent":"codebuddy-ide-4.x","conversationRequestId":"req1"}}`,
+		`{"id":"u2","parentId":"a1","type":"message","role":"user","timestamp":1767225700000,"content":[{"type":"input_text","text":"new prompt after upgrade"}],"providerData":{"agent":"craft"}}`,
+	)
+	results := parseCBCHome(t, home, legacyRoot)
+	main := cbcSession(t, results, "codebuddy:conv1")
+	assert.Equal(t, "ide-4.x", main.Session.Entrypoint)
+	assert.Equal(t, 2, main.Session.UserMessageCount, "the CBC copy carries turns made after conversion")
+	for _, r := range results {
+		assert.NotEqual(t, filepath.Join(convDir, "index.json"), r.Session.File.Path, "the frozen 4.x manifest is not parsed again")
+	}
+	prompt := main.Messages[0].Content
+	assert.Contains(t, prompt, "![image](asset://")
+	assert.Contains(t, prompt, "[image unavailable: image]")
+
+	reply := main.Messages[1]
+	assert.Equal(t, "cb4:req1", reply.SourceUUID)
+	// inputTokens 300 = 200 cache reads + 60 cache writes + 40 uncached.
+	assert.JSONEq(t, `{"input_tokens":40,"output_tokens":40,"cache_read_input_tokens":200,"cache_creation_input_tokens":60,"reasoning_tokens":10}`, string(reply.TokenUsage))
+	assert.Equal(t, 90, reply.ContextTokens)
+
+	var orphan *ParsedMessage
+	for i := range main.Messages {
+		if main.Messages[i].SourceUUID == "cb4:req2" {
+			orphan = &main.Messages[i]
+		}
+	}
+	require.NotNil(t, orphan, "a request whose message the converter dropped still counts")
+	assert.True(t, orphan.IsSystem)
+	assert.Equal(t, 5, orphan.OutputTokens)
+	assert.Equal(t, int64(50), gjson.GetBytes(orphan.TokenUsage, "input_tokens").Int())
+}
+
+// FuzzCodeBuddyCBCTranscript feeds arbitrary bytes to the CBC transcript
+// parser. Every session it returns must carry an ID and the agent, and the
+// output must stay proportional to the input.
+func FuzzCodeBuddyCBCTranscript(f *testing.F) {
+	f.Add([]byte(`{"id":"u1","type":"message","role":"user","timestamp":1,"content":[{"type":"input_text","text":"hi"}]}
+{"id":"a1","parentId":"u1","type":"function_call","name":"Bash","callId":"c","arguments":"{}","providerData":{"conversationRequestId":"r","messageId":"m","rawUsage":{"prompt_tokens":5,"completion_tokens":1}}}
+{"id":"n1","type":"resend-fork-notice"}
+{"id":"u2","type":"message","role":"user","content":"again"}
+`))
+	f.Add([]byte(`{"id":"x","parentId":"x","logicalParentId":"x","type":"message","role":"assistant","content":[]}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		home, project := cbcHome(t)
+		require.NoError(t, os.WriteFile(filepath.Join(project, "fz.jsonl"), data, 0o600))
+		results := parseCBCHome(t, home)
+		total := 0
+		for _, r := range results {
+			assert.NotEmpty(t, r.Session.ID)
+			assert.Equal(t, AgentCodeBuddy, r.Session.Agent)
+			for _, m := range r.Messages {
+				total += len(m.Content) + len(m.ThinkingText)
+			}
+		}
+		assert.LessOrEqual(t, total, 16*len(data)+4096)
+	})
+}

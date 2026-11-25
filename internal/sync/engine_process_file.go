@@ -641,6 +641,7 @@ func (e *Engine) processProviderFile(
 		StableSourceSnapshots: e.stableSourceSnapshots,
 		SourceMachines:        e.sources().sourceMachines[file.Agent],
 		PathRewriter:          e.pathRewriter,
+		AssetsDir:             e.providerAssetsDir(),
 	}
 	provider := factory.NewProvider(providerConfig)
 
@@ -1616,7 +1617,8 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	} else if (file.Agent == parser.AgentIcodemate ||
-		file.Agent == parser.AgentCodebuff) && outcome.ForceReplace &&
+		file.Agent == parser.AgentCodebuff ||
+		file.Agent == parser.AgentCodeBuddy) && outcome.ForceReplace &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		if file.Agent == parser.AgentCodebuff {
 			missingMembers, err = e.codebuffSourceMissingMembers(

@@ -161,6 +161,21 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 				}
 				continue
 			}
+			if def.Type == parser.AgentCodeBuddy {
+				cbcDirs, cbcFiles, legacy, err := resolveCodeBuddyTargets(ctx, dir)
+				if err != nil {
+					return TargetSet{}, err
+				}
+				dirs[def.Type] = append(dirs[def.Type], cbcDirs...)
+				for _, file := range cbcFiles {
+					if !slices.Contains(providerExtraFiles[def.Type], file) {
+						providerExtraFiles[def.Type] = append(providerExtraFiles[def.Type], file)
+					}
+				}
+				if !legacy {
+					continue
+				}
+			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
 			}
@@ -862,6 +877,38 @@ func curatedFileOrMissing(root, path string) (bool, error) {
 		return false, fmt.Errorf("stat remote sync target %q: %w", path, err)
 	}
 	return info.Mode().IsRegular(), nil
+}
+
+// resolveCodeBuddyTargets narrows a CodeBuddy root to what its parsers read.
+// A CLI and IDE 5.x home sends its projects directory, the IDE catalog, and
+// only the blob-store images its transcripts reference; the rest of the home
+// holds settings and caches. legacy reports whether the root also holds
+// IDE 4.x history, which keeps the whole-root transfer.
+func resolveCodeBuddyTargets(ctx context.Context, root string) (dirs, files []string, legacy bool, err error) {
+	clean := filepath.Clean(root)
+	cbc := parser.CodeBuddyCBCProjectsRoots(clean)
+	if len(cbc) == 0 {
+		return nil, nil, true, nil
+	}
+	if info, statErr := os.Stat(filepath.Join(clean, "history")); statErr == nil && info.IsDir() &&
+		filepath.Base(clean) != "projects" {
+		legacy = true
+	}
+	for _, projects := range cbc {
+		if info, statErr := os.Stat(projects); statErr != nil || !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, projects)
+		if catalog := parser.CodeBuddyCatalogForProjects(projects); catalog != "" {
+			files = append(files, catalog, catalog+"-wal", catalog+"-shm", catalog+"-journal")
+		}
+		blobs, blobErr := parser.CodeBuddyReferencedBlobs(ctx, projects)
+		if blobErr != nil {
+			return nil, nil, false, fmt.Errorf("list CodeBuddy images under %s: %w", projects, blobErr)
+		}
+		files = append(files, blobs...)
+	}
+	return dirs, files, legacy, nil
 }
 
 // resolvePoolsideTarget narrows a Poolside application-data root to

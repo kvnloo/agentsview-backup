@@ -80,6 +80,16 @@ func (e *Engine) sources() *engineSources {
 	return noEngineSources
 }
 
+// providerAssetsDir is where parsers publish attached user images. Archives
+// that keep no message content, and staged rebuild scratch databases without
+// an asset store, receive no directory so parsing writes no asset files.
+func (e *Engine) providerAssetsDir() string {
+	if e.db == nil || e.db.ArchiveContent().UsageOnly() {
+		return ""
+	}
+	return e.db.AssetsDir()
+}
+
 // ReconfigureSources replaces the engine's provider set and session roots.
 // It waits for any in-flight sync operation so a pass never switches
 // providers midway, and it does not sync the new roots; the caller decides

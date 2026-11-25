@@ -11692,9 +11692,9 @@ func (e *Engine) prepareSessionNormalizedContext(
 	return prepared, sessionWriteOK, ctx.Err()
 }
 
-// hasUnresolvedPersistedToolResult reports whether any parsed Claude or
-// iCodeMate tool_result could not resolve a persisted-output side file,
-// over the cheap parser-level carriers, before any store read.
+// hasUnresolvedPersistedToolResult reports whether any parsed Claude,
+// iCodeMate, or CodeBuddy tool_result could not resolve a persisted-output
+// side file, over the cheap parser-level carriers, before any store read.
 func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 	for _, message := range messages {
 		for _, toolResult := range message.ToolResults {
@@ -11766,7 +11766,7 @@ func (e *Engine) reconcileProviderHistoryContext(
 			prior = &ingest.PriorSession{Session: *stored}
 		}
 	}
-	if ingest.IsClaudeFormatTranscript(
+	if ingest.RestoresPersistedToolResults(
 		agent, candidate.Parsed.Session.File.Path,
 	) {
 		if (prior == nil || len(prior.Messages) == 0) &&

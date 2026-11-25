@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"unicode/utf16"
@@ -59,6 +60,7 @@ var resumeAgents = map[string]string{
 	"amp":              "amp --resume %s",
 	"kiro":             "kiro-cli chat --resume-id %s",
 	"pi":               "pi --session %s",
+	"codebuddy":        "codebuddy --resume %s",
 }
 
 const syntheticModel = "<synthetic>"
@@ -887,4 +889,48 @@ func launchClaudeDesktop(ctx context.Context, sessionID string, cwd string) *exe
 		u += "&cwd=" + url.QueryEscape(cwd)
 	}
 	return exec.CommandContext(ctx, "open", u)
+}
+
+// codebuddyResumeID returns the CLI runtime session a CodeBuddy session
+// resumes. A CLI or IDE 5.x conversation, including one the IDE forked, has
+// one; preserved branches, side questions, subagents, and unconverted 4.x
+// manifests do not.
+func codebuddyResumeID(session *db.Session) (string, bool) {
+	if session.RelationshipType == "subagent" || session.SessionKind != "" ||
+		session.SourceSessionID == "" || session.FilePath == nil ||
+		!strings.HasSuffix(*session.FilePath, ".jsonl") {
+		return "", false
+	}
+	return session.SourceSessionID, true
+}
+
+// codebuddyIDEOpeners pairs each CodeBuddy IDE opener with its URL scheme.
+var codebuddyIDEOpeners = map[string]string{
+	"codebuddy-ide":          "codebuddycn",
+	"codebuddy-ide-insiders": "codebuddycn-insiders",
+}
+
+// codebuddyConversationIDPattern is the conversation id the IDE accepts in a
+// conversation link.
+var codebuddyConversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// codebuddyIDEConversationURL builds the IDE's link that opens one stored
+// conversation, or "" when the id is not one the IDE accepts.
+func codebuddyIDEConversationURL(scheme, conversationID string) string {
+	if !codebuddyConversationIDPattern.MatchString(conversationID) {
+		return ""
+	}
+	return scheme + "://codebuddy-ide/conversation/open?id=" + conversationID
+}
+
+// openURLCommand opens a URL with the platform's default handler.
+func openURLCommand(ctx context.Context, goos, link string) *exec.Cmd {
+	switch goos {
+	case "darwin":
+		return exec.CommandContext(ctx, "open", link)
+	case "windows":
+		return exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", link)
+	default:
+		return exec.CommandContext(ctx, "xdg-open", link)
+	}
 }

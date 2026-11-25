@@ -1929,3 +1929,54 @@ func TestResumeTerminalSurvivesRequestCancellation(t *testing.T) {
 		return err == nil
 	}, time.Second, 5*time.Millisecond)
 }
+
+func TestResumeCodeBuddyUsesRuntimeSession(t *testing.T) {
+	te := setup(t)
+	assertStatus(t, te.post(t, "/api/v1/config/terminal", `{"mode":"clipboard"}`), http.StatusOK)
+	cwd := t.TempDir()
+	transcript := filepath.Join(t.TempDir(), "projects", "-work", "conv-1.jsonl")
+	te.seedSession(t, "codebuddy:conv-1", cwd, 2, func(s *db.Session) {
+		s.Agent = "codebuddy"
+		s.Cwd = cwd
+		s.SourceSessionID = "run-77"
+		s.FilePath = &transcript
+	})
+	w := te.post(t, "/api/v1/sessions/codebuddy:conv-1/resume", `{"command_only":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Command string `json:"command"`
+		Cwd     string `json:"cwd"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, strings.HasSuffix(resp.Command, " && codebuddy --resume run-77"), resp.Command)
+	assert.NotContains(t, resp.Command, "conv-1", "the archive id is not a CLI session")
+	assertSamePath(t, "cwd", resp.Cwd, cwd)
+
+	for _, tc := range []struct {
+		name string
+		edit func(*db.Session)
+	}{
+		{"preserved branch", func(s *db.Session) { s.SourceSessionID = "" }},
+		{"side question", func(s *db.Session) { s.SessionKind = "btw" }},
+		{"subagent", func(s *db.Session) {
+			s.RelationshipType = "subagent"
+			s.ParentSessionID = new("codebuddy:conv-1")
+		}},
+		{"4.x manifest", func(s *db.Session) {
+			legacy := filepath.Join(t.TempDir(), "history", "ws", "conv-x", "index.json")
+			s.FilePath = &legacy
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "codebuddy:" + strings.ReplaceAll(tc.name, " ", "-")
+			te.seedSession(t, id, cwd, 2, func(s *db.Session) {
+				s.Agent = "codebuddy"
+				s.SourceSessionID = "run-77"
+				s.FilePath = &transcript
+				tc.edit(s)
+			})
+			w := te.post(t, "/api/v1/sessions/"+id+"/resume", `{"command_only":true}`)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		})
+	}
+}

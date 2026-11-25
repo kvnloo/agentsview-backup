@@ -58,6 +58,11 @@ var openerCandidates = []openerCandidate{
 	{"xfce4-terminal", "Xfce Terminal", "terminal", []string{"xfce4-terminal"}, ""},
 	{"tilix", "Tilix", "terminal", []string{"tilix"}, ""},
 	{"xterm", "xterm", "terminal", []string{"xterm"}, ""},
+
+	// CodeBuddy IDE builds open a stored conversation through their URL
+	// scheme. Their launchers install as buddycn and buddycn-insiders.
+	{"codebuddy-ide", "CodeBuddy CN", "action", []string{"buddycn"}, ""},
+	{"codebuddy-ide-insiders", "CodeBuddy CN Insiders", "action", []string{"buddycn-insiders"}, ""},
 }
 
 // macOS-specific candidates.
@@ -75,6 +80,11 @@ var darwinOpenerCandidates = []openerCandidate{
 	// Claude Desktop — detected via app bundle. Uses claude:// URL
 	// scheme for session handoff rather than terminal launch.
 	{"claude-desktop", "Claude Desktop", "action", nil, "/Applications/Claude.app"},
+
+	// CodeBuddy IDE builds open a stored conversation through their URL
+	// scheme rather than a terminal.
+	{"codebuddy-ide", "CodeBuddy CN", "action", []string{"buddycn"}, "/Applications/CodeBuddy CN.app"},
+	{"codebuddy-ide-insiders", "CodeBuddy CN Insiders", "action", []string{"buddycn-insiders"}, "/Applications/CodeBuddy CN Insiders.app"},
 
 	// Terminals — Ghostty, iTerm2, kitty, and Terminal.app are macOS
 	// GUI apps; detect via app bundle first, fall back to PATH binary

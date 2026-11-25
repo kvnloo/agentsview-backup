@@ -434,6 +434,33 @@ func clearCodeBuddyCatalogCache() {
 	codebuddyCatalogCache.Unlock()
 }
 
+func TestCodeBuddyCBCUnreadableCatalogKeepsLastGoodRead(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "run-a.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-a","content":[{"type":"input_text","text":"hi"}]}`)
+	writeCBCCatalog(t, home,
+		`INSERT INTO conversations (id, title, custom_title, runtime_session_id) VALUES ('conv-a', 'T', 'Named in IDE', 'run-a')`)
+	results := parseCBCHome(t, home)
+	assert.Equal(t, "Named in IDE", cbcSession(t, results, "codebuddy:run-a").Session.SessionName)
+
+	// The IDE rewrites the catalog and a read lands mid-write.
+	require.NoError(t, os.WriteFile(filepath.Join(home, CodeBuddyCatalogDBName), []byte("not a database"), 0o600))
+	results = parseCBCHome(t, home)
+	assert.Equal(t, "Named in IDE", cbcSession(t, results, "codebuddy:run-a").Session.SessionName,
+		"an unreadable catalog keeps the last good metadata")
+
+	// Without an earlier good read, the parse fails so the archive keeps
+	// its stored copy and the source is retried.
+	clearCodeBuddyCatalogCache()
+	p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+		NewProvider(ProviderConfig{Roots: []string{home}, Machine: "m"})
+	sources, err := p.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	_, err = p.Parse(t.Context(), ParseRequest{Source: sources[0], Machine: "m"})
+	assert.ErrorContains(t, err, "CodeBuddy catalog")
+}
+
 func TestCodeBuddyCBCCatalogChangeSelectsChangedRows(t *testing.T) {
 	for _, unrelated := range []int{1, 50} {
 		home, project := cbcHome(t)

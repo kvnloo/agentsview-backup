@@ -2,9 +2,7 @@ package sync
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,40 +13,22 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// codexLabelRootSignature records the configured roots in stored-path form.
-func codexLabelRootSignature(roots []string) (string, error) {
-	stored := slices.Clone(roots)
-	slices.Sort(stored)
-	signature, err := json.Marshal(stored)
-	return string(signature), err
-}
-
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
 func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string) error {
-	scopes := make([]db.StoredSourcePathHintScope, 0, len(current))
-	for _, root := range current {
-		scopes = append(scopes, db.StoredSourcePathHintScope{Path: root})
-	}
-	paths, err := e.db.ListStoredSourcePathHintsContext(ctx, string(parser.AgentCodex), scopes)
+	records, err := e.db.ListSessionPathRecordsForAgents(ctx, []string{string(parser.AgentCodex)})
 	if err != nil {
 		return err
 	}
 	var ids []string
-	for _, path := range paths {
-		label := parser.CodexSourceLabelForRoots(current, path)
-		if label == "" || label == parser.CodexSourceLabelForRoots(previous, path) {
+	for _, record := range records {
+		label := parser.CodexSourceLabelForRoots(current, record.FilePath)
+		if record.Trashed || record.SourceMissing || label == "" ||
+			label == parser.CodexSourceLabelForRoots(previous, record.FilePath) {
 			continue
 		}
-		pathIDs, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))
-		if err != nil {
-			return err
-		}
-		ids = append(ids, pathIDs...)
+		ids = append(ids, record.ID)
 	}
-	if err := e.db.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0)); err != nil {
-		return fmt.Errorf("mark Codex sources stale: %w", err)
-	}
-	return nil
+	return e.db.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0))
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

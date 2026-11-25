@@ -971,11 +971,10 @@ func writeSessionProjectIdentitySnapshotExec(
 }
 
 // RestoreSessionProjectsFromIdentitySnapshots resets current project labels to
-// resolved Git-backed parser-source snapshots. It keeps freshly parsed Codex
-// source labels intact. Full resync calls this after copying snapshots from the
-// old archive and before reapplying active worktree mappings, so a missing
-// checkout cannot replace resolved historical identity with a basename
-// fallback.
+// resolved Git-backed parser-source snapshots. Full resync calls this after
+// copying snapshots from the old archive and before reapplying active worktree
+// mappings, so a missing checkout cannot replace resolved historical identity
+// with a basename fallback. It keeps freshly parsed Codex source labels intact.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	ctx context.Context, codexRoots []string,
 ) (int, error) {
@@ -1055,26 +1054,15 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			parser.CodexSourceLabelForRoots(codexRoots, restore.sourcePath) == restore.previousProject {
 			continue
 		}
-		kept = append(kept, restore)
-	}
-	var restored int64
-	for _, restore := range kept {
-		result, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			"UPDATE sessions SET project = ? WHERE id = ?",
 			restore.currentProject, restore.sessionID,
-		)
-		if err != nil {
+		); err != nil {
 			return 0, fmt.Errorf(
 				"restoring session projects from identity snapshots: %w", err,
 			)
 		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return 0, fmt.Errorf(
-				"counting restored session projects: %w", err,
-			)
-		}
-		restored += count
+		kept = append(kept, restore)
 	}
 	for _, restore := range kept {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
@@ -1092,7 +1080,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			"committing session project identity restore: %w", err,
 		)
 	}
-	return int(restored), nil
+	return len(kept), nil
 }
 
 // reconcileSessionProjectIdentityAggregatesTx republishes only the immutable

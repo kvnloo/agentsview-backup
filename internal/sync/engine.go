@@ -6345,8 +6345,9 @@ func (e *Engine) syncAllLocked(
 	if err != nil {
 		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
-	labelRoots := slices.Clone(e.sources().agentDirs[parser.AgentCodex])
-	labelSignature, signatureErr := codexLabelRootSignature(labelRoots)
+	labelRoots := slices.Sorted(slices.Values(e.sources().agentDirs[parser.AgentCodex]))
+	signature, signatureErr := json.Marshal(labelRoots)
+	labelSignature := string(signature)
 	if signatureErr != nil {
 		log.Printf("encode Codex label roots: %v", signatureErr)
 	}
@@ -6354,20 +6355,14 @@ func (e *Engine) syncAllLocked(
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
 	}
-	codexDisabled := slices.Contains(e.sources().preserveAgents, parser.AgentCodex)
-	refreshLabels := scope == nil && !codexDisabled && signatureErr == nil &&
-		storedLabelSignature != labelSignature && !e.ephemeral
-	labelPassComplete := false
+	refreshLabels := scope == nil && signatureErr == nil && !e.ephemeral &&
+		!slices.Contains(e.sources().preserveAgents, parser.AgentCodex) &&
+		storedLabelSignature != labelSignature
 	defer func() {
 		if err := closeProviderCache(); err != nil {
 			stats.abort(err.Error())
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
-		}
-		if labelPassComplete && ctx.Err() == nil {
-			if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
-				log.Printf("persist Codex label roots: %v", err)
-			}
 		}
 	}()
 	ctx = e.parsePolicyContext(ctx)
@@ -6776,7 +6771,11 @@ func (e *Engine) syncAllLocked(
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
 	}
-	labelPassComplete = refreshLabels
+	if refreshLabels && ctx.Err() == nil {
+		if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
+			log.Printf("persist Codex label roots: %v", err)
+		}
+	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats

@@ -5780,7 +5780,11 @@ schemas keep their existing ordering behavior.
     source UUID so forks that repeat inherited responses count them once.
     `context-usage` snapshots and `credit` values are not spend. A converted 4.x
     conversation adds each 4.x request's final `statsSnapshot` once, as
-    `cb4:<requestId>`, because the converter drops those totals.
+    `cb4:<requestId>:<messageId>`, because older converters drop those totals.
+    Newer converters copy the same totals into the transcript under that
+    identity, so the copy and the 4.x record count once. A converted record
+    uses `lastStepInputTokens` as its context size, because its prompt total
+    sums every step of the request.
   - IDE 4.x: the parser interprets `lastStepInputTokens` as inclusive input,
     subtracts `lastStepCachedInputTokens` for uncached input (floored at zero),
     and preserves `lastStepOutputTokens` and `statsSnapshot.thinkingTokens`

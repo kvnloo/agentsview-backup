@@ -172,6 +172,10 @@ type codebuddyCBCUsage struct {
 	hasRead    bool
 	hasWrite   bool
 	hasReason  bool
+	// context replaces the prompt-derived context size when the record
+	// reports the window separately.
+	context    int
+	hasContext bool
 }
 
 // codebuddyCBCUsageFrom interprets rawUsage first and the normalized usage
@@ -225,6 +229,13 @@ func codebuddyCBCUsageFrom(pd gjson.Result) (codebuddyCBCUsage, bool) {
 	u.input = max(prompt-read-write, 0)
 	u.output = max(int(outputField.Int()), 0)
 	u.reasoning = min(reason, u.output)
+	// A 4.x request carried into a converted transcript sums every model
+	// step, so its prompt total is not a context window; the last step's
+	// prompt is.
+	if last := pd.Get("lastStepInputTokens"); last.Type == gjson.Number && last.Int() >= 0 {
+		u.context = int(last.Int())
+		u.hasContext = true
+	}
 	return u, u.hasInput || u.hasOutput || u.hasRead || u.hasWrite
 }
 
@@ -306,6 +317,10 @@ func (u codebuddyCBCUsage) apply(msg *ParsedMessage) {
 	msg.HasOutputTokens = u.hasOutput
 	msg.ContextTokens = u.input + u.cacheRead + u.cacheWrite
 	msg.HasContextTokens = u.hasInput || u.hasRead || u.hasWrite
+	if u.hasContext {
+		msg.ContextTokens = u.context
+		msg.HasContextTokens = true
+	}
 	msg.tokenPresenceKnown = true
 }
 
@@ -318,6 +333,11 @@ func codebuddyUsageIdentity(pd gjson.Result) string {
 	message := pd.Get("messageId").Str
 	if request == "" || message == "" {
 		return ""
+	}
+	if pd.Get("agent").Str == "codebuddy-ide-4.x" {
+		// A converted 4.x record carries the totals the 4.x message with
+		// this id recorded; the 4.x copy names that total the same way.
+		return "cb4:" + request + ":" + message
 	}
 	key := "cb:" + request + ":" + message
 	if step := pd.Get("stepSeq"); step.Type == gjson.Number {

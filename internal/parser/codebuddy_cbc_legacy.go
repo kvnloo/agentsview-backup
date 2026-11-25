@@ -149,8 +149,7 @@ func loadCodeBuddyLegacyCompanion(
 		id string
 		ts time.Time
 	}
-	// The snapshot is cumulative per request; the latest message carrying
-	// it holds the request's final totals.
+	// Each assistant message carrying a snapshot records its own totals.
 	latest := map[string]keyed{}
 	gjson.GetBytes(index, "messages").ForEach(func(_, ref gjson.Result) bool {
 		msgID := ref.Get("id").Str
@@ -171,14 +170,9 @@ func loadCodeBuddyLegacyCompanion(
 			return true
 		}
 		msg.Timestamp = parseCodeBuddyTimestamp(root.Get("createdAt").Str)
-		if prior, seen := latest[msg.SourceUUID]; seen {
-			if msg.Timestamp.Before(prior.ts) {
-				return true
-			}
-			delete(out.usage, prior.id)
-		}
+		msg.SourceUUID += ":" + msgID
 		out.usage[msgID] = msg
-		latest[msg.SourceUUID] = keyed{id: msgID, ts: msg.Timestamp}
+		latest[msgID] = keyed{id: msgID, ts: msg.Timestamp}
 		return true
 	})
 	keys := make([]keyed, 0, len(latest))
@@ -231,6 +225,33 @@ func codebuddyInsertLegacyUsage(
 		}
 	}
 	return msgs
+}
+
+// codebuddyLegacyUsageMissingFrom keeps the 4.x request totals a converted
+// transcript does not already carry. Newer converters copy each request's
+// totals into the transcript; older ones drop them.
+func codebuddyLegacyUsageMissingFrom(
+	usage map[string]ParsedMessage, items []codebuddyCBCItem,
+) map[string]ParsedMessage {
+	if len(usage) == 0 {
+		return usage
+	}
+	carried := make(map[string]bool)
+	for _, it := range items {
+		pd := it.providerData()
+		if pd.Get("rawUsage").IsObject() || pd.Get("usage").IsObject() {
+			if id := codebuddyUsageIdentity(pd); id != "" {
+				carried[id] = true
+			}
+		}
+	}
+	out := make(map[string]ParsedMessage, len(usage))
+	for key, msg := range usage {
+		if !carried[msg.SourceUUID] {
+			out[key] = msg
+		}
+	}
+	return out
 }
 
 // codebuddyFillUsageModels names the model of usage rows recorded without

@@ -63,7 +63,7 @@ func parseCodeBuddyCBCFile(
 	var legacyOrder []string
 	if t.converted && !ident.subagent && len(in.legacyRoots) > 0 {
 		companion := loadCodeBuddyLegacyCompanion(ctx, in.legacyRoots, t.cwd, ident.rawID)
-		in.opts.legacyUsage = companion.usage
+		in.opts.legacyUsage = codebuddyLegacyUsageMissingFrom(companion.usage, t.items)
 		legacyOrder = companion.order
 		if blobs, ok := in.opts.assets.(codebuddyBlobAssets); ok {
 			blobs.legacyAssets = companion.assetsDir

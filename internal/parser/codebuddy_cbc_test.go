@@ -542,14 +542,14 @@ func TestCodeBuddyConvertedSessionUsesCBCAndLegacyUsage(t *testing.T) {
 	assert.Contains(t, prompt, "[image unavailable: image]")
 
 	reply := main.Messages[1]
-	assert.Equal(t, "cb4:req1", reply.SourceUUID)
+	assert.Equal(t, "cb4:req1:a1", reply.SourceUUID)
 	// inputTokens 300 = 200 cache reads + 60 cache writes + 40 uncached.
 	assert.JSONEq(t, `{"input_tokens":40,"output_tokens":40,"cache_read_input_tokens":200,"cache_creation_input_tokens":60,"reasoning_tokens":10}`, string(reply.TokenUsage))
 	assert.Equal(t, 90, reply.ContextTokens)
 
 	var orphan *ParsedMessage
 	for i := range main.Messages {
-		if main.Messages[i].SourceUUID == "cb4:req2" {
+		if main.Messages[i].SourceUUID == "cb4:req2:a9" {
 			orphan = &main.Messages[i]
 		}
 	}
@@ -557,6 +557,33 @@ func TestCodeBuddyConvertedSessionUsesCBCAndLegacyUsage(t *testing.T) {
 	assert.True(t, orphan.IsSystem)
 	assert.Equal(t, 5, orphan.OutputTokens)
 	assert.Equal(t, int64(50), gjson.GetBytes(orphan.TokenUsage, "input_tokens").Int())
+}
+
+func TestCodeBuddyConvertedTranscriptWithCopiedTotalsCountsOnce(t *testing.T) {
+	home, project := cbcHome(t)
+	legacyRoot := t.TempDir()
+	convDir := filepath.Join(legacyRoot, "history", "ws", "conv2")
+	require.NoError(t, os.MkdirAll(filepath.Join(convDir, "messages"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "index.json"), []byte(`{"messages":[{"id":"a1","role":"assistant"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "a1.json"), []byte(`{"role":"assistant","createdAt":"2026-01-01T00:00:02Z","extra":{"requestId":"req1","modelId":"luna","lastStepInputTokens":90,"statsSnapshot":{"inputTokens":3000000,"outputTokens":40,"cachedInputTokens":2990000}}}`), 0o600))
+	// Newer converters copy the request totals into the transcript.
+	writeCBC(t, filepath.Join(project, "conv2.jsonl"),
+		`{"type":"session-meta","id":"m","sessionId":"conv2","meta":{"codebuddy.ai/converterVersion":"ide-main-craft-jsonl/34"}}`,
+		`{"id":"u1","type":"message","role":"user","timestamp":1767225601000,"content":[{"type":"input_text","text":"go"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1767225602000,"content":[{"type":"output_text","text":"done"}],"providerData":{"agent":"codebuddy-ide-4.x","conversationRequestId":"req1","messageId":"a1","model":"luna","lastStepInputTokens":90,"rawUsage":{"prompt_tokens":3000000,"completion_tokens":40,"prompt_cache_hit_tokens":2990000}}}`,
+	)
+	results := parseCBCHome(t, home, legacyRoot)
+	main := cbcSession(t, results, "codebuddy:conv2")
+	var usage []ParsedMessage
+	for _, m := range main.Messages {
+		if len(m.TokenUsage) > 0 {
+			usage = append(usage, m)
+		}
+	}
+	require.Len(t, usage, 1, "the copied total and the 4.x record are one response")
+	assert.Equal(t, "cb4:req1:a1", usage[0].SourceUUID)
+	assert.Equal(t, 40, usage[0].OutputTokens)
+	assert.Equal(t, 90, usage[0].ContextTokens, "the request total sums every step; the context is the last step's prompt")
 }
 
 // FuzzCodeBuddyCBCTranscript feeds arbitrary bytes to the CBC transcript

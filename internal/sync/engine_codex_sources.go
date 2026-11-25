@@ -43,19 +43,58 @@ func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
 func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string) error {
-	records, err := e.db.ListSessionPathRecordsForAgents(ctx, []string{string(parser.AgentCodex)})
+	return staleCodexLabelsInDB(ctx, e.db, previous, current, nil)
+}
+
+func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, current []string, only map[string]bool) error {
+	records, err := database.ListSessionPathRecordsForAgents(ctx, []string{string(parser.AgentCodex)})
 	if err != nil {
 		return err
 	}
 	var ids []string
 	for _, record := range records {
+		if only != nil && !only[record.ID] {
+			continue
+		}
 		label := parser.CodexSourceLabelForRoots(current, record.FilePath)
 		if label == parser.CodexSourceLabelForRoots(previous, record.FilePath) {
 			continue
 		}
-		ids = append(ids, record.ID)
+		if database.GetSessionDataVersion(ctx, record.ID) >= db.CurrentDataVersion() {
+			ids = append(ids, record.ID)
+		}
 	}
-	return e.db.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0))
+	return database.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0))
+}
+
+// restoreCodexLabelRoots preserves the old roots when Codex was disabled and
+// marks restored sessions whose labels changed for their next reparse.
+func restoreCodexLabelRoots(ctx context.Context, oldDB, newDB *db.DB, restored []string) error {
+	previous, err := oldDB.GetSyncState(ctx, codexLabelRootsKey)
+	if err != nil {
+		return err
+	}
+	current, err := newDB.GetSyncState(ctx, codexLabelRootsKey)
+	if err != nil {
+		return err
+	}
+	if current == "" {
+		if previous != "" {
+			return newDB.SetSyncState(ctx, codexLabelRootsKey, previous)
+		}
+		return nil
+	}
+	if current == previous || len(restored) == 0 {
+		return nil
+	}
+	var oldRoots, newRoots []string
+	_ = json.Unmarshal([]byte(previous), &oldRoots)
+	_ = json.Unmarshal([]byte(current), &newRoots)
+	only := make(map[string]bool, len(restored))
+	for _, id := range restored {
+		only[id] = true
+	}
+	return staleCodexLabelsInDB(ctx, newDB, oldRoots, newRoots, only)
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

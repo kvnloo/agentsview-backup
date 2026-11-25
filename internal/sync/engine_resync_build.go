@@ -737,6 +737,9 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	if err := restoreCodexLabelRoots(ctx, origDB, newDB, orphaned); err != nil {
+		return abortPreserved(fmt.Errorf("restore Codex label roots: %w", err))
+	}
 	var demoteIDs []string
 	for _, id := range stats.deferredPreservedIDs {
 		stored, readErr := newDB.GetSessionFull(ctx, id)

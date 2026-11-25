@@ -117,9 +117,10 @@ func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
 	preContainerStates map[string]parser.SQLiteContainerState,
-) ([]parser.DiscoveredFile, int) {
+) ([]parser.DiscoveredFile, int, map[parser.AgentType]bool) {
 	var files []parser.DiscoveredFile
 	var failures int
+	failedAgents := make(map[parser.AgentType]bool)
 	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
 		preContainerStates,
 	)
@@ -190,6 +191,7 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
+			failedAgents[agentType] = true
 			_, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err)
 			if !incomplete || ctx.Err() != nil || !provider.Capabilities().Sync.PartialDiscovery {
 				continue
@@ -262,7 +264,7 @@ func (e *Engine) discoverProviderSources(
 			files = append(files, discovered)
 		}
 	}
-	return files, failures
+	return files, failures, failedAgents
 }
 
 func filterProviderSourcesToScope(

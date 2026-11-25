@@ -6409,12 +6409,12 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures := e.discoverProviderSources(
+	providerFound, providerFailures, failedAgents := e.discoverProviderSources(
 		ctx, scope, preContainerStates,
 	)
-	if scope == nil && providerFailures == 0 {
+	if scope == nil {
 		labelRoots, err := e.refreshCodexLabelRoots(ctx)
-		if err == nil && labelRoots != "" {
+		if err == nil && labelRoots != "" && !failedAgents[parser.AgentCodex] {
 			err = e.db.SetSyncState(ctx, codexLabelRootsKey, labelRoots)
 		}
 		if err != nil {

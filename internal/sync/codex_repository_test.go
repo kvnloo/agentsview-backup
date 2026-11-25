@@ -127,6 +127,13 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		require.NoError(t, os.Rename(missing, f.sessions))
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
 	})
+	t.Run("older session stays stale", func(t *testing.T) {
+		f := setup(t, false)
+		require.NoError(t, f.database.SetExistingSessionDataVersions(t.Context(), []string{"codex:" + id}, 39))
+		_, err := f.engine.refreshCodexLabelRoots(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, 39, f.database.GetSessionDataVersion(t.Context(), "codex:"+id))
+	})
 	t.Run("missing signature", func(t *testing.T) {
 		f := setup(t, false)
 		require.NoError(t, f.database.DeleteSyncState(t.Context(), codexLabelRootsKey))
@@ -152,6 +159,23 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		assert.Equal(t, previous, stored)
 		factories[parser.AgentCodex] = original
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("other provider discovery failure", func(t *testing.T) {
+		f := setup(t, false)
+		other := t.TempDir()
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root}, parser.AgentClaude: {other}}})
+		fail := true
+		factories := f.engine.sources().providerFactories
+		factories[parser.AgentClaude] = failingCodexDiscoveryFactory{factories[parser.AgentClaude], &fail}
+		stats := f.engine.SyncAll(t.Context(), nil)
+		assert.Positive(t, stats.providerFailures)
+		assert.Equal(t, 1, stats.Synced)
+		session, err := f.database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		assert.Equal(t, "team", session.Project)
+		stored, err := f.database.GetSyncState(t.Context(), codexLabelRootsKey)
+		require.NoError(t, err)
+		assert.Contains(t, stored, f.root)
 	})
 	t.Run("renamed root", func(t *testing.T) {
 		f := setup(t, true)
@@ -188,6 +212,29 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		require.NotNil(t, preserved)
 		assert.Equal(t, before.Project, preserved.Project)
 		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root}}})
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("resync while disabled after narrowing", func(t *testing.T) {
+		f := setup(t, true)
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.sessions}}, DisabledAgents: []parser.AgentType{parser.AgentCodex}})
+		stats := f.engine.ResyncAll(t.Context(), nil)
+		require.False(t, stats.Aborted, "%v", stats.Warnings)
+		require.NoError(t, os.MkdirAll(filepath.Join(f.parent, "missing-checkout"), 0o755))
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.sessions}}})
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "api")
+	})
+	t.Run("resync with unavailable source", func(t *testing.T) {
+		f := setup(t, false)
+		otherID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+		other := filepath.Join(f.root, "other", ".codex-run-v1-abc", "sessions", "rollout-2026-10-08T12-00-00-"+otherID+".jsonl")
+		dbtest.WriteTestFile(t, other, []byte(testjsonl.CodexSessionMetaJSON(otherID, "/work/checkout", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+		missing := filepath.Join(f.parent, "temporarily-unavailable")
+		require.NoError(t, os.Rename(f.sessions, missing))
+		stats := f.engine.ResyncAll(t.Context(), nil)
+		require.False(t, stats.Aborted, "%v", stats.Warnings)
+		assert.Equal(t, db.CurrentDataVersion(), f.database.GetSessionDataVersion(t.Context(), "codex:"+otherID))
+		assert.Less(t, f.database.GetSessionDataVersion(t.Context(), "codex:"+id), db.CurrentDataVersion())
+		require.NoError(t, os.Rename(missing, f.sessions))
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
 	})
 }

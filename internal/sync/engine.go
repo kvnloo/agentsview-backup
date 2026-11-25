@@ -6354,7 +6354,9 @@ func (e *Engine) syncAllLocked(
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
 	}
-	refreshLabels := scope == nil && signatureErr == nil && storedLabelSignature != labelSignature && !e.ephemeral
+	codexDisabled := slices.Contains(e.sources().preserveAgents, parser.AgentCodex)
+	refreshLabels := scope == nil && !codexDisabled && signatureErr == nil &&
+		storedLabelSignature != labelSignature && !e.ephemeral
 	labelPassComplete := false
 	defer func() {
 		if err := closeProviderCache(); err != nil {

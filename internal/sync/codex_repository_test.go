@@ -107,6 +107,39 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 	}
 }
 
+func TestCodexLabelRefreshAfterResyncWhileDisabled(t *testing.T) {
+	database := openTestDB(t)
+	parent := t.TempDir()
+	root := filepath.Join(parent, "logs")
+	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	before, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, DisabledAgents: []parser.AgentType{parser.AgentCodex}})
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "%v", stats.Warnings)
+	require.Zero(t, stats.Failed)
+	preserved, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, preserved)
+	assert.Equal(t, before.Project, preserved.Project)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team", session.Project)
+	assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+}
+
 func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 	for _, labeled := range []bool{true, false} {
 		name := "folder label"

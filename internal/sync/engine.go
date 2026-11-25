@@ -6416,7 +6416,8 @@ func (e *Engine) syncAllLocked(
 			if e.pathRewriter != nil {
 				path = e.pathRewriter(path)
 			}
-			if parser.CodexSourceLabelForRoots(labelRoots, file.Path) != "" || parser.CodexSourceLabelForRoots(previousRoots, path) != "" {
+			if parser.CodexSourceLabelForRoots(labelRoots, file.Path) != "" || parser.CodexSourceLabelForRoots(previousRoots, path) != "" ||
+				storedLabelSignature == "" && db.CodexProjectIsSourceLabel(string(file.Agent), file.Path, ".") {
 				file.ForceParse = true
 			}
 		}
@@ -11095,12 +11096,20 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		for _, i := range indexes[id] {
 			sess := &batch[i].sess
-			if db.CodexProjectIsSourceLabel(string(sess.Agent), sess.File.Path, snapshot.Project) ||
-				!e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
+			if !e.sameLocalMachineAttribution(snapshot.Machine, sess.Machine) ||
 				!e.snapshotRootContainsCwd(
 					snapshot.RootPath, sourceProjectPreservationCwd(batch[i]),
 				) {
 				continue
+			}
+			if sess.SessionKind != parser.SessionKindRoborev && db.CodexProjectIsSourceLabel(string(sess.Agent), sess.File.Path, snapshot.Project) {
+				stored, err := e.db.GetSession(ctx, id)
+				if err != nil {
+					return batch, fmt.Errorf("load session for Codex label: %w", err)
+				}
+				if stored != nil && stored.SessionKind == parser.SessionKindRoborev {
+					continue
+				}
 			}
 			sess.Project = snapshot.Project
 		}

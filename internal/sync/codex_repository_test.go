@@ -106,7 +106,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 }
 
 func TestCodexLabelRefreshAfterNarrowingAndDisabledSync(t *testing.T) {
-	for _, mode := range []string{"narrow", "disabled", "assigned", "missing checkout"} {
+	for _, mode := range []string{"narrow", "disabled", "assigned", "missing checkout", "missing signature"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			parent := t.TempDir()
@@ -126,6 +126,9 @@ func TestCodexLabelRefreshAfterNarrowingAndDisabledSync(t *testing.T) {
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 			t.Cleanup(engine.Close)
 			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			if mode == "missing signature" {
+				require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
+			}
 			if mode == "assigned" {
 				_, err := database.AssignSessionProject(t.Context(), "codex:"+id, "chosen")
 				require.NoError(t, err)
@@ -179,6 +182,41 @@ func TestCodexLabelRefreshMissingSignatureWithOverlappingRoots(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, "team/case", session.Project)
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+}
+
+func TestCodexMissingCheckoutKeepsRepositoryNamedLikeFolderLabel(t *testing.T) {
+	database := openTestDB(t)
+	parent := t.TempDir()
+	sessions := filepath.Join(parent, "logs", "team", ".codex-run-v1-abc", "sessions")
+	repo := filepath.Join(parent, "team")
+	cwd := filepath.Join(repo, "nested")
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "config"), []byte("[remote \"origin\"]\n\turl = https://example.com/org/team.git\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600))
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	message := testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")
+	meta := testjsonl.CodexSessionMetaJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+message+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Equal(t, "team", session.Project)
+	require.Equal(t, parser.SessionKindNonInteractive, session.SessionKind)
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	require.Equal(t, "team", snapshots[0].Project)
+	require.NoError(t, os.Rename(repo, filepath.Join(parent, "moved-checkout")))
+	require.Equal(t, 1, engine.SyncAllForceParse(t.Context(), nil).Synced)
+	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team", session.Project)
 }
 
 func TestCodexLabelRefreshDoesNotAdvanceAfterProviderFailure(t *testing.T) {

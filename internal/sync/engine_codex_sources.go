@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"log"
 	"os"
@@ -13,6 +14,45 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func (e *Engine) prepareLabelReconciliation(ctx context.Context, agent parser.AgentType) error {
+	if e.sourceSyncErr != nil {
+		return e.sourceSyncErr
+	}
+	if agent == "" || agent == parser.AgentCodex {
+		return e.refreshCodexLabelRoots(ctx)
+	}
+	return nil
+}
+
+// refreshCodexLabelRoots marks changed labels for retry before recording the roots.
+func (e *Engine) refreshCodexLabelRoots(ctx context.Context) error {
+	if e.ephemeral || slices.Contains(e.sources().preserveAgents, parser.AgentCodex) {
+		return nil
+	}
+	roots := slices.Sorted(slices.Values(e.sources().agentDirs[parser.AgentCodex]))
+	signature, err := json.Marshal(roots)
+	if err != nil {
+		return err
+	}
+	stored, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
+	if err != nil {
+		return err
+	}
+	if stored == string(signature) {
+		return nil
+	}
+	var previous []string
+	if stored != "" {
+		if err := json.Unmarshal([]byte(stored), &previous); err != nil {
+			return err
+		}
+	}
+	if err := e.staleCodexLabels(ctx, previous, roots); err != nil {
+		return err
+	}
+	return e.db.SetSyncState(ctx, codexLabelRootsKey, string(signature))
+}
+
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
 func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string) error {
 	records, err := e.db.ListSessionPathRecordsForAgents(ctx, []string{string(parser.AgentCodex)})
@@ -22,7 +62,7 @@ func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []strin
 	var ids []string
 	for _, record := range records {
 		label := parser.CodexSourceLabelForRoots(current, record.FilePath)
-		if record.Trashed || record.SourceMissing || label == "" ||
+		if record.Trashed || record.SourceMissing ||
 			label == parser.CodexSourceLabelForRoots(previous, record.FilePath) {
 			continue
 		}

@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -4310,8 +4309,8 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 	onProgress ProgressFunc,
 ) (SyncStats, int, passEpilogueEligibility, error) {
-	if e.sourceSyncErr != nil {
-		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, e.sourceSyncErr
+	if err := e.prepareLabelReconciliation(ctx, agent); err != nil {
+		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, err
 	}
 	e.reportProgress(onProgress, Progress{
 		Phase:  PhaseDiscovering,
@@ -6345,19 +6344,6 @@ func (e *Engine) syncAllLocked(
 	if err != nil {
 		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
-	labelRoots := slices.Sorted(slices.Values(e.sources().agentDirs[parser.AgentCodex]))
-	signature, signatureErr := json.Marshal(labelRoots)
-	labelSignature := string(signature)
-	if signatureErr != nil {
-		log.Printf("encode Codex label roots: %v", signatureErr)
-	}
-	storedLabelSignature, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
-	if err != nil {
-		log.Printf("load Codex label roots: %v", err)
-	}
-	refreshLabels := scope == nil && signatureErr == nil && !e.ephemeral &&
-		!slices.Contains(e.sources().preserveAgents, parser.AgentCodex) &&
-		storedLabelSignature != labelSignature
 	defer func() {
 		if err := closeProviderCache(); err != nil {
 			stats.abort(err.Error())
@@ -6414,10 +6400,8 @@ func (e *Engine) syncAllLocked(
 	providerFound, providerFailures := e.discoverProviderSources(
 		ctx, scope, preContainerStates,
 	)
-	if refreshLabels {
-		var previousRoots []string
-		_ = json.Unmarshal([]byte(storedLabelSignature), &previousRoots)
-		if err := e.staleCodexLabels(ctx, previousRoots, labelRoots); err != nil {
+	if scope == nil {
+		if err := e.refreshCodexLabelRoots(ctx); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
 	}
@@ -6769,11 +6753,6 @@ func (e *Engine) syncAllLocked(
 		startupReconciliationSucceeded(ctx, stats, nil) {
 		if err := e.db.CompleteScopedUpgrade(ctx); err != nil {
 			log.Printf("persist scoped upgrade completion: %v", err)
-		}
-	}
-	if refreshLabels && ctx.Err() == nil {
-		if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
-			log.Printf("persist Codex label roots: %v", err)
 		}
 	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is

@@ -41,84 +41,93 @@ func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 }
 
 func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
-	for _, mode := range []string{"scoped then full", "quick", "unavailable source", "overlapping roots without signature", "resync while disabled"} {
-		t.Run(mode, func(t *testing.T) {
-			database := openTestDB(t)
-			parent := t.TempDir()
-			root := filepath.Join(parent, "logs")
-			inner := filepath.Join(root, "team")
-			label := "team"
-			if mode == "overlapping roots without signature" {
-				inner = filepath.Join(inner, "case")
-				label = "team/case"
-			}
-			sessions := filepath.Join(inner, ".codex-run-v1-abc", "sessions")
-			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-			source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
-			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-			newEngine := func(roots ...string) *Engine {
-				engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
-				t.Cleanup(engine.Close)
-				return engine
-			}
-			initialRoot := sessions
-			if mode == "overlapping roots without signature" {
-				initialRoot = filepath.Join(root, "team")
-			}
-			first := newEngine(initialRoot)
-			require.Equal(t, 1, first.SyncAll(t.Context(), nil).Synced)
-			if mode == "overlapping roots without signature" {
-				session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.Equal(t, "case", session.Project)
-				require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
-			}
-			first.Close()
-			roots := []string{root}
-			if mode == "overlapping roots without signature" {
-				roots = []string{initialRoot, root}
-			}
-			engine := newEngine(roots...)
-			if mode == "scoped then full" {
-				assert.Zero(t, engine.SyncRootsSince(t.Context(), roots, time.Time{}, nil).Synced)
-			}
-			if mode == "unavailable source" {
-				missing := filepath.Join(parent, "temporarily-unavailable")
-				require.NoError(t, os.Rename(sessions, missing))
-				assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-				require.NoError(t, os.Rename(missing, sessions))
-			}
-			if mode == "resync while disabled" {
-				before, err := database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, before)
-				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}, DisabledAgents: []parser.AgentType{parser.AgentCodex}})
-				resync := engine.ResyncAll(t.Context(), nil)
-				require.False(t, resync.Aborted, "%v", resync.Warnings)
-				require.Zero(t, resync.Failed)
-				preserved, err := database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, preserved)
-				assert.Equal(t, before.Project, preserved.Project)
-				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
-			}
-			var stats SyncStats
-			if mode == "quick" {
-				stats = engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil)
-			} else {
-				stats = engine.SyncAll(t.Context(), nil)
-			}
-			require.Zero(t, stats.Failed)
-			assert.Equal(t, 1, stats.Synced)
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	type fixture struct {
+		database               *db.DB
+		engine                 *Engine
+		root, sessions, parent string
+	}
+	setup := func(t *testing.T, overlapping bool) fixture {
+		t.Helper()
+		database := openTestDB(t)
+		parent := t.TempDir()
+		root := filepath.Join(parent, "logs")
+		inner := filepath.Join(root, "team")
+		if overlapping {
+			inner = filepath.Join(inner, "case")
+		}
+		sessions := filepath.Join(inner, ".codex-run-v1-abc", "sessions")
+		source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+		meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+		dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+		initialRoot := sessions
+		if overlapping {
+			initialRoot = filepath.Join(root, "team")
+		}
+		engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {initialRoot}}})
+		t.Cleanup(engine.Close)
+		require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+		roots := []string{root}
+		if overlapping {
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)
-			require.NotNil(t, session)
-			assert.Equal(t, label, session.Project)
-			assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
-			assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-		})
+			require.Equal(t, "case", session.Project)
+			require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
+			roots = []string{initialRoot, root}
+		}
+		engine.Close()
+		engine = NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
+		t.Cleanup(engine.Close)
+		return fixture{database, engine, root, sessions, parent}
 	}
+	check := func(t *testing.T, f fixture, stats SyncStats, label string) {
+		t.Helper()
+		require.Zero(t, stats.Failed)
+		assert.Equal(t, 1, stats.Synced)
+		session, err := f.database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, label, session.Project)
+		assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
+		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
+	}
+	t.Run("scoped then full", func(t *testing.T) {
+		f := setup(t, false)
+		assert.Zero(t, f.engine.SyncRootsSince(t.Context(), []string{f.root}, time.Time{}, nil).Synced)
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("quick", func(t *testing.T) {
+		f := setup(t, false)
+		check(t, f, f.engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil), "team")
+	})
+	t.Run("unavailable source", func(t *testing.T) {
+		f := setup(t, false)
+		missing := filepath.Join(f.parent, "temporarily-unavailable")
+		require.NoError(t, os.Rename(f.sessions, missing))
+		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
+		require.NoError(t, os.Rename(missing, f.sessions))
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("overlapping roots without signature", func(t *testing.T) {
+		f := setup(t, true)
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team/case")
+	})
+	t.Run("resync while disabled", func(t *testing.T) {
+		f := setup(t, false)
+		before, err := f.database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, before)
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root}}, DisabledAgents: []parser.AgentType{parser.AgentCodex}})
+		resync := f.engine.ResyncAll(t.Context(), nil)
+		require.False(t, resync.Aborted, "%v", resync.Warnings)
+		require.Zero(t, resync.Failed)
+		preserved, err := f.database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, preserved)
+		assert.Equal(t, before.Project, preserved.Project)
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root}}})
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
 }
 
 func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
@@ -173,6 +182,48 @@ func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 				assert.Equal(t, "checkout", session.Project)
 			}
 		})
+	}
+}
+
+func TestCodexScheduledReconciliationRefreshesLabels(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	logs := filepath.Join(root, "logs")
+	sessions := filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions")
+	other := filepath.Join(root, "other")
+	ids := []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "cccccccc-cccc-4ccc-8ccc-cccccccccccc"}
+	for i, id := range ids {
+		dir := sessions
+		if i == 2 {
+			dir = other
+		}
+		source := filepath.Join(dir, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+		dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/checkout", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	}
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions, other}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {logs, other}}})
+	stats, _, err := engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs, other}, false, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.Synced)
+	for i, id := range ids {
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		if i == 2 {
+			assert.Equal(t, "checkout", session.Project)
+		} else {
+			assert.Equal(t, "team", session.Project)
+		}
+	}
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions, other}}})
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCodex, []string{sessions, other}))
+	for _, id := range ids {
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "checkout", session.Project)
 	}
 }
 

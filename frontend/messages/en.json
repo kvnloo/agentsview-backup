@@ -238,6 +238,8 @@
   "session_breadcrumb_failed_to_open": "Failed to open",
   "session_breadcrumb_open_in_codex_desktop": "Open in Codex Desktop",
   "session_breadcrumb_open_in_codebuddy_ide": "Open in {app}",
+  "session_breadcrumb_codebuddy_ide_no_conversation": "{app} has no record of this conversation on this computer, for example because it ran only in the CLI. Continue it from a terminal.",
+  "session_breadcrumb_codebuddy_ide_launch_failed": "Couldn't launch {app} to open this conversation.",
   "session_breadcrumb_open_in_claude_code": "Open in Claude Code",
   "session_breadcrumb_summary_mode": "Summary mode",
   "session_breadcrumb_summary_mode_tooltip": "Tool results, thinking, and diffs are missing from this transcript. Full fidelity needs the agy-reader sidecar — install it, or if installed, let it catch up. Click to learn how.",

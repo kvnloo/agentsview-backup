@@ -240,6 +240,8 @@
   "session_breadcrumb_failed_to_open": "No se pudo abrir",
   "session_breadcrumb_open_in_codex_desktop": "Abrir en Codex Desktop",
   "session_breadcrumb_open_in_codebuddy_ide": "Abrir en {app}",
+  "session_breadcrumb_codebuddy_ide_no_conversation": "{app} no tiene registro de esta conversación en este equipo, por ejemplo porque solo se ejecutó en la CLI. Continúala desde un terminal.",
+  "session_breadcrumb_codebuddy_ide_launch_failed": "No se pudo iniciar {app} para abrir esta conversación.",
   "session_breadcrumb_open_in_claude_code": "Abrir en Claude Code",
   "session_breadcrumb_summary_mode": "Modo resumen",
   "session_breadcrumb_summary_mode_tooltip": "En esta transcripción faltan los resultados de herramienta, el razonamiento y los diffs. La fidelidad completa requiere el sidecar agy-reader: instálalo o, si ya está instalado, deja que se ponga al día. Haz clic para saber cómo.",

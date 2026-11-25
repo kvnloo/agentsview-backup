@@ -238,6 +238,8 @@
   "session_breadcrumb_failed_to_open": "開けませんでした",
   "session_breadcrumb_open_in_codex_desktop": "Codex デスクトップで開く",
   "session_breadcrumb_open_in_codebuddy_ide": "{app} で開く",
+  "session_breadcrumb_codebuddy_ide_no_conversation": "このコンピューターの {app} にはこの会話の記録がありません（CLI だけで実行した会話など）。ターミナルから再開してください。",
+  "session_breadcrumb_codebuddy_ide_launch_failed": "この会話を開くために {app} を起動できませんでした。",
   "session_breadcrumb_open_in_claude_code": "クロードコードで開く",
   "session_breadcrumb_summary_mode": "サマリーモード",
   "session_breadcrumb_summary_mode_tooltip": "このトランスクリプトには、ツールの結果、考え方、差分が含まれていません。完全な忠実度を実現するには、agy-reader サイドカーが必要です。インストールするか、インストールされている場合は追いつきます。クリックして方法を確認してください。",

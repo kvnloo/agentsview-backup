@@ -234,6 +234,8 @@
   "session_breadcrumb_failed_to_open": "打开失败",
   "session_breadcrumb_open_in_codex_desktop": "在 Codex Desktop 中打开",
   "session_breadcrumb_open_in_codebuddy_ide": "在 {app} 中打开",
+  "session_breadcrumb_codebuddy_ide_no_conversation": "本机的 {app} 中没有这段对话的记录（例如它只在 CLI 中运行过）。请在终端中继续。",
+  "session_breadcrumb_codebuddy_ide_launch_failed": "无法启动 {app} 来打开这段对话。",
   "session_breadcrumb_open_in_claude_code": "在 Claude Code 中打开",
   "session_breadcrumb_summary_mode": "摘要模式",
   "session_breadcrumb_summary_mode_tooltip": "此 transcript 缺少工具结果、思考内容和代码差异。需要 agy-reader sidecar 才能获得完整保真度 — 请安装它，若已安装，请等待其同步完成。点击了解如何操作。",

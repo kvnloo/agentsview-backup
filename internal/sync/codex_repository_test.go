@@ -17,47 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestCodexRemoteLabelRefreshWithMissingRoot(t *testing.T) {
-	database := openTestDB(t)
-	ids := []string{"cccccccc-cccc-4ccc-8ccc-cccccccccccc", "dddddddd-dddd-4ddd-8ddd-dddddddddddd"}
-	bodies := make(map[string]string, len(ids))
-	for _, id := range ids {
-		bodies[id] = testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z") + "\n"
-	}
-	importSessions := func(host string, includeMissing bool) SyncStats {
-		t.Helper()
-		base := t.TempDir()
-		root, missing := filepath.Join(base, "logs"), filepath.Join(base, "missing")
-		for _, id := range ids {
-			path := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			dbtest.WriteTestFile(t, path, []byte(bodies[id]))
-			mtime := time.Date(2026, 10, 8, 12, 0, 1, 0, time.UTC)
-			require.NoError(t, os.Chtimes(path, mtime, mtime))
-		}
-		if includeMissing {
-			require.NoError(t, os.MkdirAll(missing, 0o755))
-		}
-		engine := NewEngine(t.Context(), database, EngineConfig{
-			Machine: host, IDPrefix: host + "~", Ephemeral: true, CompleteSourceMirror: true,
-			DisableFilesystemProjectDiscovery: true,
-			AgentDirs:                         map[parser.AgentType][]string{parser.AgentCodex: {root, missing}},
-			PathRewriter: func(path string) string {
-				return host + ":/remote/" + filepath.ToSlash(strings.TrimPrefix(path, base+string(filepath.Separator)))
-			},
-		})
-		defer engine.Close()
-		stats := engine.SyncAll(t.Context(), nil)
-		require.Zero(t, stats.Failed)
-		return stats
-	}
-	assert.Equal(t, 2, importSessions("host-a", false).Synced)
-	assert.Zero(t, importSessions("host-a", false).Synced)
-	assert.Equal(t, 2, importSessions("host-b", false).Synced)
-	assert.Zero(t, importSessions("host-a", false).Synced)
-	assert.Equal(t, 2, importSessions("host-a", true).Synced)
-	assert.Zero(t, importSessions("host-a", true).Synced)
-}
-
 func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()

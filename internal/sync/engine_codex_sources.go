@@ -16,17 +16,11 @@ import (
 )
 
 // codexLabelRootSignature records the configured roots in stored-path form.
-func codexLabelRootSignature(roots []string, rewrite func(string) string) string {
-	stored := make([]string, 0, len(roots))
-	for _, root := range roots {
-		if rewrite != nil {
-			root = rewrite(root)
-		}
-		stored = append(stored, root)
-	}
+func codexLabelRootSignature(roots []string) (string, error) {
+	stored := slices.Clone(roots)
 	slices.Sort(stored)
-	signature, _ := json.Marshal(stored)
-	return string(signature)
+	signature, err := json.Marshal(stored)
+	return string(signature), err
 }
 
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
@@ -43,7 +37,7 @@ func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []strin
 	for _, path := range paths {
 		label := parser.CodexSourceLabelForRoots(current, path)
 		if knownRoots && label == parser.CodexSourceLabelForRoots(previous, path) ||
-			!knownRoots && label == "" && !parser.CodexProjectIsSourceLabel(path, ".") {
+			!knownRoots && label == "" {
 			continue
 		}
 		pathIDs, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))

@@ -24,7 +24,7 @@ func codexLabelRootSignature(roots []string) (string, error) {
 }
 
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
-func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string, knownRoots bool) error {
+func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string) error {
 	scopes := make([]db.StoredSourcePathHintScope, 0, len(current))
 	for _, root := range current {
 		scopes = append(scopes, db.StoredSourcePathHintScope{Path: root})
@@ -36,21 +36,8 @@ func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []strin
 	var ids []string
 	for _, path := range paths {
 		label := parser.CodexSourceLabelForRoots(current, path)
-		if knownRoots && label == parser.CodexSourceLabelForRoots(previous, path) {
+		if label == "" || label == parser.CodexSourceLabelForRoots(previous, path) {
 			continue
-		}
-		if !knownRoots && label == "" {
-			if !strings.Contains(filepath.ToSlash(path), "/.codex-run-v1-") {
-				continue
-			}
-			project, ok := e.db.GetProjectByAgentPath(
-				ctx, path, string(parser.AgentCodex),
-			)
-			if !ok || !db.CodexProjectIsSourceLabel(
-				string(parser.AgentCodex), path, project,
-			) {
-				continue
-			}
 		}
 		pathIDs, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))
 		if err != nil {

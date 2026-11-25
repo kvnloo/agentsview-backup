@@ -82,67 +82,6 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 	}
 }
 
-func TestCodexLabelRefreshAfterScopedImportThenRootNarrowing(t *testing.T) {
-	for _, mode := range []string{"selected root", "changed path"} {
-		t.Run(mode, func(t *testing.T) {
-			database := openTestDB(t)
-			parent := t.TempDir()
-			root := filepath.Join(parent, "logs")
-			sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
-			checkout := filepath.Join(parent, "api")
-			require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
-			require.NoError(t, os.WriteFile(
-				filepath.Join(checkout, ".git", "config"),
-				[]byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"),
-				0o644,
-			))
-			require.NoError(t, os.WriteFile(
-				filepath.Join(checkout, ".git", "HEAD"),
-				[]byte("ref: refs/heads/main\n"), 0o644,
-			))
-			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-			source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			meta := testjsonl.CodexSessionMetaWithFieldsJSON(
-				id, checkout, "codex_exec", "2026-10-08T12:00:00Z",
-				map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}},
-			)
-			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+
-				testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-			engine := NewEngine(t.Context(), database, EngineConfig{
-				Machine:   "local",
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-			})
-			t.Cleanup(engine.Close)
-			switch mode {
-			case "selected root":
-				stats := engine.SyncRootsSince(t.Context(), []string{root}, time.Time{}, nil)
-				require.Zero(t, stats.Failed)
-				assert.Equal(t, 1, stats.Synced)
-			case "changed path":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{source}))
-			}
-			initial, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			require.NotNil(t, initial)
-			assert.Equal(t, "team", initial.Project)
-			assert.Equal(t, parser.SessionKindRoborev, initial.SessionKind)
-
-			engine.ReconfigureSources(SourceConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}},
-			})
-			stats := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, stats.Failed)
-			assert.Equal(t, 1, stats.Synced)
-			updated, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			require.NotNil(t, updated)
-			assert.Equal(t, "api", updated.Project)
-			assert.Equal(t, parser.SessionKindNonInteractive, updated.SessionKind)
-			assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-		})
-	}
-}
-
 func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 	database := openTestDB(t)
 	parent := t.TempDir()
@@ -187,6 +126,7 @@ func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 	engine.ReconfigureSources(SourceConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 	})
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	stats := engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
 	require.Zero(t, stats.Failed)
@@ -195,6 +135,7 @@ func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, "team", session.Project)
 	assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 
 func TestCodexLabelRefreshAfterRootRename(t *testing.T) {

@@ -6419,9 +6419,9 @@ func (e *Engine) syncAllLocked(
 	)
 	if refreshLabels {
 		var previousRoots, currentRoots []string
-		knownRoots := json.Unmarshal([]byte(storedLabelSignature), &previousRoots) == nil
+		_ = json.Unmarshal([]byte(storedLabelSignature), &previousRoots)
 		_ = json.Unmarshal([]byte(labelSignature), &currentRoots)
-		if err := e.staleCodexLabels(ctx, previousRoots, currentRoots, knownRoots); err != nil {
+		if err := e.staleCodexLabels(ctx, previousRoots, currentRoots); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
 	}

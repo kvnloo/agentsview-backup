@@ -709,9 +709,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
 // (190: include retained tool calls in pull request links.)
-// (191: classify Muse Personal runs that Muse started itself from the source
-// of their first user item, stored as session_kind muse-background. Re-parse
-// Muse Personal sources in place; source and session identities are
+// (191: classify Muse Personal runs from the source of their first user item.
+// Scheduled and upkeep runs are stored as session_kind muse-background;
+// delegated browser and subagent runs as non-interactive workers, with
+// subagent runs linked to the session named by their requester field.
+// Re-parse Muse Personal sources in place; source and session identities are
 // unchanged.)
 const dataVersion = 191
 

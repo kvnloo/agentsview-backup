@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (
@@ -976,7 +977,7 @@ func writeSessionProjectIdentitySnapshotExec(
 // checkout cannot replace resolved historical identity with a basename
 // fallback.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
-	ctx context.Context,
+	ctx context.Context, codexRoots []string,
 ) (int, error) {
 	if err := db.requireWritable(); err != nil {
 		return 0, err
@@ -1050,9 +1051,8 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 
 	kept := restores[:0]
 	for _, restore := range restores {
-		if CodexProjectIsSourceLabel(
-			restore.agent, restore.sourcePath, restore.previousProject,
-		) {
+		if restore.agent == string(parser.AgentCodex) && restore.previousProject != "" &&
+			parser.CodexSourceLabelForRoots(codexRoots, restore.sourcePath) == restore.previousProject {
 			continue
 		}
 		kept = append(kept, restore)

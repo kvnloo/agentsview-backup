@@ -879,7 +879,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
-		ctx,
+		ctx, e.sources().agentDirs[parser.AgentCodex],
 	); err != nil {
 		log.Printf("resync: restore session project identity: %v", err)
 		stats.Aborted = true

@@ -33,6 +33,7 @@
   "app_auth_placeholder": "粘贴 auth token",
   "app_auth_authenticate": "验证",
   "app_auth_disconnect_reset": "断开并重置",
+  "session_delete_failed": "无法移至回收站：{reason}",
   "app_undo_session_deleted": "会话已删除",
   "app_undo_undo": "撤销",
   "nav_toggle_sidebar": "切换侧边栏",
@@ -835,10 +836,10 @@
   "usage_tokens_attribution_title": "Token 归因",
   "usage_attribution_treemap": "矩形树图",
   "usage_attribution_list": "列表",
-  "usage_label_scale_title": "标签大小比例",
-  "usage_label_scale_linear": "线性",
-  "usage_label_scale_sqrt": "平方根",
-  "usage_label_scale_log": "对数",
+  "usage_tile_scale_title": "图块大小比例",
+  "usage_tile_scale_linear": "线性",
+  "usage_tile_scale_sqrt": "平方根",
+  "usage_tile_scale_log": "对数",
   "usage_chart_style": "图表样式",
   "usage_chart_style_smooth": "平滑",
   "usage_chart_style_lines": "折线",
@@ -3143,5 +3144,6 @@
   "getting_started_open_session": "打开会话",
   "getting_started_search": "搜索历史记录",
   "getting_started_usage": "查看令牌用量",
-  "getting_started_insights": "阅读洞察"
+  "getting_started_insights": "阅读洞察",
+  "session_diagnostics_hide": "隐藏诊断"
 }

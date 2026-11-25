@@ -33,6 +33,7 @@
   "app_auth_placeholder": "Paste auth token",
   "app_auth_authenticate": "Authenticate",
   "app_auth_disconnect_reset": "Disconnect and reset",
+  "session_delete_failed": "Could not move to trash: {reason}",
   "app_undo_session_deleted": "Session deleted",
   "app_undo_undo": "Undo",
   "nav_toggle_sidebar": "Toggle sidebar",
@@ -866,10 +867,10 @@
   "usage_tokens_attribution_title": "Token attribution",
   "usage_attribution_treemap": "Treemap",
   "usage_attribution_list": "List",
-  "usage_label_scale_title": "Label size scale",
-  "usage_label_scale_linear": "Linear",
-  "usage_label_scale_sqrt": "Sqrt",
-  "usage_label_scale_log": "Log",
+  "usage_tile_scale_title": "Tile size scale",
+  "usage_tile_scale_linear": "Linear",
+  "usage_tile_scale_sqrt": "Sqrt",
+  "usage_tile_scale_log": "Log",
   "usage_chart_style": "Chart style",
   "usage_chart_style_smooth": "Smooth",
   "usage_chart_style_lines": "Lines",
@@ -3268,5 +3269,6 @@
   "getting_started_open_session": "Open a session",
   "getting_started_search": "Search your history",
   "getting_started_usage": "See your token use",
-  "getting_started_insights": "Read your insights"
+  "getting_started_insights": "Read your insights",
+  "session_diagnostics_hide": "Hide diagnostics"
 }

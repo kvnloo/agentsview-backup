@@ -210,7 +210,7 @@ rebuilds; ordinary archives keep their parser version unchanged. Data version
 173 requires no source reparse; it keeps older binaries from writing archives
 whose image-text index they cannot maintain.
 
-Data version 186 requires no source reparse; it keeps older binaries from
+Data version 190 requires no source reparse; it keeps older binaries from
 writing archives with pushed sessions they cannot preserve.
 
 ### Artifact checkpoint landings

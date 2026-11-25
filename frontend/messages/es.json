@@ -35,6 +35,7 @@
   "app_auth_placeholder": "Pega el token de autenticación",
   "app_auth_authenticate": "Autenticar",
   "app_auth_disconnect_reset": "Desconectar y restablecer",
+  "session_delete_failed": "No se pudo mover a la papelera: {reason}",
   "app_undo_session_deleted": "Sesión eliminada",
   "app_undo_undo": "Deshacer",
   "nav_toggle_sidebar": "Mostrar u ocultar la barra lateral",
@@ -869,10 +870,10 @@
   "usage_tokens_attribution_title": "Atribución de tokens",
   "usage_attribution_treemap": "Treemap",
   "usage_attribution_list": "Lista",
-  "usage_label_scale_title": "Escala del tamaño de etiquetas",
-  "usage_label_scale_linear": "Lineal",
-  "usage_label_scale_sqrt": "Raíz",
-  "usage_label_scale_log": "Log",
+  "usage_tile_scale_title": "Escala del tamaño de los bloques",
+  "usage_tile_scale_linear": "Lineal",
+  "usage_tile_scale_sqrt": "Raíz",
+  "usage_tile_scale_log": "Log",
   "usage_chart_style": "Estilo del gráfico",
   "usage_chart_style_smooth": "Suave",
   "usage_chart_style_lines": "Líneas",
@@ -3294,5 +3295,6 @@
   "getting_started_open_session": "Abrir una sesión",
   "getting_started_search": "Buscar en tu historial",
   "getting_started_usage": "Ver el uso de tokens",
-  "getting_started_insights": "Leer tus análisis"
+  "getting_started_insights": "Leer tus análisis",
+  "session_diagnostics_hide": "Ocultar diagnósticos"
 }

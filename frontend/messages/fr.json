@@ -33,6 +33,7 @@
   "app_auth_placeholder": "Collez le token d'authentification",
   "app_auth_authenticate": "S'authentifier",
   "app_auth_disconnect_reset": "Déconnecter et réinitialiser",
+  "session_delete_failed": "Impossible de déplacer vers la corbeille : {reason}",
   "app_undo_session_deleted": "Session supprimée",
   "app_undo_undo": "Annuler",
   "nav_toggle_sidebar": "Afficher/masquer la barre latérale",
@@ -867,10 +868,10 @@
   "usage_tokens_attribution_title": "Répartition des tokens",
   "usage_attribution_treemap": "Treemap",
   "usage_attribution_list": "Liste",
-  "usage_label_scale_title": "Échelle de taille des libellés",
-  "usage_label_scale_linear": "Linéaire",
-  "usage_label_scale_sqrt": "Racine",
-  "usage_label_scale_log": "Log",
+  "usage_tile_scale_title": "Échelle de taille des tuiles",
+  "usage_tile_scale_linear": "Linéaire",
+  "usage_tile_scale_sqrt": "Racine",
+  "usage_tile_scale_log": "Log",
   "usage_chart_style": "Style du graphique",
   "usage_chart_style_smooth": "Lissé",
   "usage_chart_style_lines": "Lignes",
@@ -3294,5 +3295,6 @@
   "getting_started_open_session": "Ouvrir une session",
   "getting_started_search": "Rechercher dans votre historique",
   "getting_started_usage": "Voir votre utilisation des jetons",
-  "getting_started_insights": "Lire vos analyses"
+  "getting_started_insights": "Lire vos analyses",
+  "session_diagnostics_hide": "Masquer les diagnostics"
 }

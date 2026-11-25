@@ -694,7 +694,7 @@ keeps the default directories.
 | Aider                 | No default; opt in with `AIDER_DIR` or `agents.aider.dirs`                                                                                                       | `.aider.chat.history.md` Markdown history files                                                                                                               |
 | Amp (deprecated)      | `~/.local/share/amp/threads/`                                                                                                                                    | Historical local JSON thread files                                                                                                                            |
 | Antigravity (IDE)     | `~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`                                                                                                           | SQLite database per session, or the plaintext `brain/<uuid>/.system_generated/logs/transcript.jsonl` for a conversation with no database                      |
-| Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                                                                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
+| Antigravity CLI       | `~/.gemini/antigravity-cli/`, `~/.t3/userdata/providers/antigravity/` (or `$T3CODE_HOME/userdata/providers/antigravity/`)                                        | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
 | Augure Code           | `~/.augure/sessions/`                                                                                                                                            | Codex-format JSONL per session                                                                                                                                |
 | Augure Desktop 3 beta | (platform-specific, see below)                                                                                                                                   | Hermes-format `state.db` and `sessions/` transcripts                                                                                                          |
 | Claude Code           | `~/.claude/projects/`                                                                                                                                            | JSONL per session                                                                                                                                             |
@@ -780,6 +780,11 @@ Vibe turn appears as soon as Vibe journals it, before the session goes idle.
 OpenClaw checks both representations under each configured agent directory. The
 SQLite layout uses one `agent/openclaw-agent.sqlite` file per agent, which
 AgentsView reads without writing to or migrating the database.
+
+**Codex.** A configured Codex sessions directory can contain Roborev logs at
+`<label>/.codex-run-v1-*/sessions/YYYY/MM/DD/rollout-*.jsonl`. AgentsView uses
+the label path as the project unless a worktree mapping matches the working
+directory.
 
 **Augure Code.** Augure Code reads Codex-format JSONL from
 `~/.augure/sessions/` and appears under the separate `augure-code` agent ID. To
@@ -1198,6 +1203,19 @@ receiving new sessions after Kilo rebuilt the extension on OpenCode (public beta
 format and only archives older sessions, while newer Kilo VS Code activity shows
 up under `kilo`.
 
+**Antigravity CLI meta-harness containers.** Meta-harnesses such as T3 Code run
+`agy acp` with isolated per-instance directories beneath a shared container
+root (by default `~/.t3/userdata/providers/antigravity/<hash>/antigravity-acp`,
+or `$T3CODE_HOME/userdata/providers/antigravity` when `T3CODE_HOME` is an
+absolute path). AgentsView includes the T3 Code container by default alongside
+`~/.gemini/antigravity-cli/` and discovers new instances without restarting.
+Other meta-harnesses that isolate Antigravity CLI or ACP profiles beneath a
+directory root (`<root>/<instance>/antigravity-acp`,
+`<root>/<instance>/antigravity-cli`, `<root>/<instance>/conversations`, or a
+single `--gemini-dir` profile containing `antigravity-acp` or
+`antigravity-cli`) can be added directly to `agents.antigravity-cli.dirs` or
+`ANTIGRAVITY_CLI_DIR`.
+
 **Antigravity CLI transcript sources.** Antigravity CLI has used both SQLite
 databases and AES-encrypted `.pb` files. AgentsView reads whichever source is
 richest, in this order:
@@ -1359,10 +1377,8 @@ To collect your Muse Personal sessions:
    curl -fsSL https://agentsview.io/install.sh | bash
    ```
 
-   The installer fetches the latest release. Release 0.47.0 and earlier cannot
-   read Muse Personal sessions. Support is on `main` and ships in the first
-   release that lists it in the [changelog](/docs/changelog/); until then, the
-   installed CLI finds no Muse Personal sessions.
+   The installer fetches the latest release. Muse Personal requires 0.48.0 or
+   later.
 
 1. Ask your Muse to run `agentsview source sync` on that machine. AgentsView
    reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl` under your
@@ -2149,7 +2165,12 @@ highlight the segmented matches, while highlighting inside an opened transcript
 uses the original query and may miss separated Chinese words.
 
 The first backfill, a changed fingerprint, or any pending session triggers a
-full index rebuild before startup finishes, and AgentsView logs that wait.
+full index rebuild after the daemon starts listening. Until it finishes, CJK
+full-text searches return the "full-text search is unavailable" error. They
+work again after the repair finishes.
+If the substring index is missing, substring searches scan messages until the
+repair finishes. Sessions shows the saved archive while repair runs. Archive
+writes, including startup sync, wait while the repair holds the writer.
 Because the freshness ledger records session IDs rather than old message IDs and
 token content, it cannot remove stale entries for individual replaced or deleted
 messages. Removing the sidecar drops the CJK index but keeps the
@@ -2376,8 +2397,8 @@ Change detection tracks file size, mtime, inode, and device to validate
 incremental parses more reliably, and a pool of 8 workers processes files in parallel
 during sync.
 
-On `main` (not yet released), shared JSONL discovery can isolate an inaccessible
-file or subtree when the provider supports scoped traversal. A dangling symlink
+Shared JSONL discovery can isolate an inaccessible file or subtree when the
+provider supports scoped traversal. A dangling symlink
 stays incomplete, while retries inspect only the unfinished scope; archived
 sessions beneath that scope stay available, and unrelated session changes keep
 importing. Restoring access lets the retained retry finish without a daemon

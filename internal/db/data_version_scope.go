@@ -74,6 +74,10 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	184:                         {}, // Existing prompts are indexed on open; nothing to reparse.
 	185:                         {}, // Account stamps are written by the next usage sync; nothing to reparse.
+	186:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
+	187:                         {parser.AgentHermes, parser.AgentAugureDesktop},
+	188:                         {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentPrimeAgent},
+	189:                         {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate, parser.AgentOpenClaude, parser.AgentAmp, parser.AgentCursor, parser.AgentFactory, parser.AgentIflow, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentDevin, parser.AgentOpenHands, parser.AgentZCode, parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentTau, parser.AgentCommandCode, parser.AgentQwen, parser.AgentQwenPaw, parser.AgentGemini, parser.AgentGoose, parser.AgentGrok, parser.AgentFx, parser.AgentCline, parser.AgentZencoder, parser.AgentWorkBuddy, parser.AgentDeepSeekTUI, parser.AgentKiro, parser.AgentCodebuff, parser.AgentPositAssistant},
 	SessionPushDataVersion:      {}, // Older binaries cannot preserve pushed receipts; nothing to reparse.
 }
 

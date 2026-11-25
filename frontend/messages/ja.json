@@ -33,6 +33,7 @@
   "app_auth_placeholder": "認証トークンを貼り付けます",
   "app_auth_authenticate": "認証する",
   "app_auth_disconnect_reset": "切断してリセットする",
+  "session_delete_failed": "ゴミ箱に移動できませんでした: {reason}",
   "app_undo_session_deleted": "セッションが削除されました",
   "app_undo_undo": "元に戻す",
   "nav_toggle_sidebar": "サイドバーの切り替え",
@@ -862,10 +863,10 @@
   "usage_tokens_attribution_title": "トークンの帰属",
   "usage_attribution_treemap": "ツリーマップ",
   "usage_attribution_list": "リスト",
-  "usage_label_scale_title": "ラベルサイズの尺度",
-  "usage_label_scale_linear": "線形",
-  "usage_label_scale_sqrt": "平方根",
-  "usage_label_scale_log": "対数",
+  "usage_tile_scale_title": "タイルサイズの尺度",
+  "usage_tile_scale_linear": "線形",
+  "usage_tile_scale_sqrt": "平方根",
+  "usage_tile_scale_log": "対数",
   "usage_chart_style": "グラフの表示",
   "usage_chart_style_smooth": "なめらか",
   "usage_chart_style_lines": "折れ線",
@@ -3217,5 +3218,6 @@
   "getting_started_open_session": "セッションを開く",
   "getting_started_search": "履歴を検索",
   "getting_started_usage": "トークン使用量を見る",
-  "getting_started_insights": "インサイトを読む"
+  "getting_started_insights": "インサイトを読む",
+  "session_diagnostics_hide": "診断を非表示"
 }

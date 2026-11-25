@@ -698,7 +698,17 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (183: prefer structured Antigravity user prompts over skill expansions.)
 // (184: prevent older binaries from overwriting prompt-derived PR links.)
 // (185: prevent older binaries from clearing Cursor account usage stamps on reparse.)
-// (186: prevent older binaries from writing archives with pushed sessions.)
+// (186: normalize Antigravity model display names and effort suffixes into base
+// model slugs plus messages.reasoning_effort. Re-parse Antigravity and
+// Antigravity CLI sources in place; source and session identities are unchanged.)
+// (187: re-parse compacted Hermes state.db sessions to exclude archived/hidden
+// rows and preserve display_order without losing companion suppression.)
+// (188: split Pi /skill: expansions into a skill row and the typed prompt.)
+// (189: normalize inline base64 tool-result image blocks in DecodeContent into
+// canonical input_image blocks so image retention, offload, and image_text
+// indexing see them. Re-parse toolResultContentLength and raw tool-result array
+// providers in place; source and session identities are unchanged.)
+// (190: prevent older binaries from writing archives with pushed sessions.)
 const dataVersion = SessionPushDataVersion
 
 const archiveOnlyVersionBase = 1 << 20
@@ -797,11 +807,14 @@ END;
 `
 
 // Each row indexes its full transcript in rendered and its dialogue in content.
-const schemaFTS = `
+const schemaMessageSearchView = `
 CREATE VIEW IF NOT EXISTS message_search_content AS
 SELECT id, session_id, content AS rendered,
     COALESCE(dialogue_text, content) AS content FROM messages
 UNION ALL SELECT id, NULL, text, '' FROM image_text_cache;
+`
+
+const schemaFTS = schemaMessageSearchView + `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, rendered,
     content='message_search_content',
@@ -957,6 +970,8 @@ type DB struct {
 	afterSearchRead      func()
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
+	dashboardFlights     kept.Flights[dashboardPartsResult]
+	dashboardMemo        dashboardPartsMemo
 	usageKept            kept.Memo[DailyUsageResult]
 	usageFlights         kept.Flights[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
@@ -989,6 +1004,8 @@ type DB struct {
 	archiveContent atomic.Int32
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
+	messageFTSRepairPending  atomic.Bool
+	searchIndexRepairPending atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
@@ -1467,6 +1484,11 @@ func OpenWithProgress(
 	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
 }
 
+// OpenDaemonWithProgress defers search index repair until the daemon listens.
+func OpenDaemonWithProgress(ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc) (*DB, error) {
+	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress)
+}
+
 // OpenIsolated opens an archive without starting long-running database
 // maintenance. Short-lived, isolated workflows must close the returned DB.
 func OpenIsolated(ctx context.Context, path string) (*DB, error) {
@@ -1514,7 +1536,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if !info.Mode().IsRegular() || info.Size() != 0 {
 		return nil, errors.New("fresh database file must be an empty regular file")
 	}
-	d, err := openAndInit(ctx, path, false, false, nil)
+	d, err := openAndInit(ctx, path, false, false, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1575,6 +1597,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 type openOptions struct {
 	backgroundMaintenance        bool
 	deferRepositoryProjectRepair bool
+	deferMessageFTSRepair        bool
 }
 
 func open(
@@ -1610,7 +1633,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	d, err := openAndInit(ctx, path, schemaRepairNeeded, options.backgroundMaintenance, progress)
+	d, err := openAndInit(ctx, path, schemaRepairNeeded, options.backgroundMaintenance, options.deferMessageFTSRepair, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -1625,7 +1648,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return closeOnError(err)
 	}
-	if err := d.migrateColumns(ctx, progress); err != nil {
+	if err := d.migrateColumns(ctx, progress, options.deferMessageFTSRepair); err != nil {
 		return closeOnError(fmt.Errorf("migrating columns: %w", err))
 	}
 	progress.report("Finalizing database setup")
@@ -3119,6 +3142,13 @@ CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_update AFTER UPDATE OF t
 WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
     UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
 END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_insert AFTER INSERT ON messages BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_update AFTER UPDATE OF content_length ON messages
+WHEN OLD.content_length IS NOT NEW.content_length BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
 `
 
 const toolsGenerationSchemaSQL = `
@@ -3468,7 +3498,7 @@ END;
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
-func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) error {
+func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc, deferMessageFTSRepair bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
@@ -3522,8 +3552,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := ensureSubstringIndex(ctx, w, progress); err != nil {
+	deferred, err := ensureSubstringIndex(ctx, w, progress, deferMessageFTSRepair)
+	if err != nil {
 		return err
+	}
+	if deferred {
+		db.searchIndexRepairPending.Store(true)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -5136,7 +5170,7 @@ func (db *DB) Vacuum(ctx context.Context) error {
 func openAndInit(
 	ctx context.Context,
 	path string,
-	schemaRepairNeeded, backgroundMaintenance bool,
+	schemaRepairNeeded, backgroundMaintenance, deferMessageFTSRepair bool,
 	progress OpenProgressFunc,
 ) (*DB, error) {
 	if err := ctx.Err(); err != nil {
@@ -5202,7 +5236,7 @@ func openAndInit(
 		)
 	}
 
-	if err := db.init(ctx, progress); err != nil {
+	if err := db.init(ctx, progress, deferMessageFTSRepair); err != nil {
 		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
@@ -5338,7 +5372,6 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	defer db.mu.Unlock()
 	stmts := []string{
 		"DROP TRIGGER IF EXISTS image_text_cjk_ai", "DROP TRIGGER IF EXISTS image_text_cjk_ad", "DROP TRIGGER IF EXISTS image_text_cjk_au",
-		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
 		"DROP TRIGGER IF EXISTS messages_cjk_ai",
 		"DROP TRIGGER IF EXISTS messages_cjk_ad",
 		"DROP TRIGGER IF EXISTS messages_cjk_au",
@@ -5346,11 +5379,8 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		"DROP TRIGGER IF EXISTS sessions_cjk_pending_au",
 		"DROP TRIGGER IF EXISTS sessions_cjk_pending_ad",
 		"DROP TABLE IF EXISTS messages_cjk_fts",
-		"DROP TRIGGER IF EXISTS messages_ai",
-		"DROP TRIGGER IF EXISTS messages_ad",
-		"DROP TRIGGER IF EXISTS messages_au",
-		"DROP TABLE IF EXISTS messages_fts",
 	}
+	stmts = append(stmts, messageFTSDrops...)
 	stmts = append(stmts, dropSubstringIndexSQL...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
@@ -5378,15 +5408,17 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	if err := rebuildMessageFTS(ctx, w, nil); err != nil {
+	if err := rebuildMessageFTS(ctx, w, nil, false); err != nil {
 		return err
 	}
+	db.messageFTSRepairPending.Store(false)
 	if err := rebuildSubstringIndex(ctx, w); err != nil {
 		return err
 	}
-	if err := ensureCJKFTS(ctx, w, true); err != nil {
+	if _, err := ensureCJKFTS(ctx, w, true, false); err != nil {
 		return fmt.Errorf("rebuild CJK fts index: %w", err)
 	}
+	db.searchIndexRepairPending.Store(false)
 	return nil
 }
 
@@ -5521,6 +5553,9 @@ func (db *DB) checkFTSModuleLoads(
 
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS(ctx context.Context) bool {
+	if db.messageFTSRepairPending.Load() {
+		return false
+	}
 	// We need to actually query the table, because it might exist in
 	// sqlite_master but fail to load if the fts5 module is missing in the
 	// current runtime. A MATCH reads the index instead of scanning rows, and
@@ -5538,7 +5573,7 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 	defer func() {
 		if !available {
 			db.cjkFTSUnavailableLog.Do(func() {
-				log.Print("CJK FTS unavailable or stale; using standard FTS5 until the archive is reopened")
+				log.Print("CJK FTS unavailable or stale; using standard FTS5 unless index repair is pending")
 			})
 		}
 	}()
@@ -5573,7 +5608,7 @@ func (db *DB) setDataVersion(ctx context.Context) error {
 	})
 }
 
-func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
+func (db *DB) init(ctx context.Context, progress OpenProgressFunc, deferMessageFTSRepair bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
@@ -5632,17 +5667,31 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		}
 	}
 	if fts5Available {
-		if !hadFTS {
-			if err := rebuildMessageFTS(ctx, w, progress); err != nil {
+		needsRepair := !hadFTS
+		if hadFTS {
+			var err error
+			if needsRepair, err = refreshDialogueFTS(ctx, w); err != nil {
 				return err
 			}
-		} else if err := refreshDialogueFTS(ctx, w, progress); err != nil {
-			return err
+		}
+		if needsRepair {
+			if deferMessageFTSRepair {
+				if err := prepareMessageFTSRepair(ctx, w); err != nil {
+					return err
+				}
+				db.messageFTSRepairPending.Store(true)
+			} else if err := rebuildMessageFTS(ctx, w, progress, false); err != nil {
+				return err
+			}
 		}
 	}
 
-	if err := ensureCJKFTS(ctx, w, false); err != nil {
+	deferred, err := ensureCJKFTS(ctx, w, false, deferMessageFTSRepair)
+	if err != nil {
 		return fmt.Errorf("initializing CJK FTS: %w", err)
+	}
+	if deferred {
+		db.searchIndexRepairPending.Store(true)
 	}
 
 	var recallFTSCount int
@@ -5980,7 +6029,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
-	if err := installCJKFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer, db.searchIndexRepairPending.Load()); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}
@@ -6115,7 +6164,7 @@ func (db *DB) ReopenWriter() error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
-	if err := installCJKFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer, db.searchIndexRepairPending.Load()); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}

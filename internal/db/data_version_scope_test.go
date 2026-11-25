@@ -29,6 +29,51 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
+func TestHermesCompactionUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop},
+		ScopedDataVersionProviders(186, 187))
+}
+
+func TestToolResultImageDecodeUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentClaude,
+		parser.AgentCowork,
+		parser.AgentQoder,
+		parser.AgentIcodemate,
+		parser.AgentOpenClaude,
+		parser.AgentAmp,
+		parser.AgentCursor,
+		parser.AgentFactory,
+		parser.AgentIflow,
+		parser.AgentOpenClaw,
+		parser.AgentQClaw,
+		parser.AgentDevin,
+		parser.AgentOpenHands,
+		parser.AgentZCode,
+		parser.AgentPi,
+		parser.AgentOMP,
+		parser.AgentOMO,
+		parser.AgentPrimeAgent,
+		parser.AgentStepCode,
+		parser.AgentDirectAPI,
+		parser.AgentTau,
+		parser.AgentCommandCode,
+		parser.AgentQwen,
+		parser.AgentQwenPaw,
+		parser.AgentGemini,
+		parser.AgentGoose,
+		parser.AgentGrok,
+		parser.AgentFx,
+		parser.AgentCline,
+		parser.AgentZencoder,
+		parser.AgentWorkBuddy,
+		parser.AgentDeepSeekTUI,
+		parser.AgentKiro,
+		parser.AgentCodebuff,
+		parser.AgentPositAssistant,
+	}, ScopedDataVersionProviders(188, 189))
+}
+
 func TestCommitLinkUpgradeScope(t *testing.T) {
 	d := testDB(t)
 	for _, agent := range []string{"codex", "claude"} {
@@ -70,20 +115,21 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 
 func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	ctx := t.Context()
+	// The push version reparses nothing, so only the version before it can
+	// move to it without a reparse.
+	const previous = SessionPushDataVersion - 1
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "push compatibility upgrade")
 	for _, id := range []string{"complete", "retry"} {
 		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude" })
 	}
-	insertSession(t, d, "evener", "project", func(s *Session) { s.Agent = "evener" })
-	require.NoError(t, d.SetSessionDataVersion(ctx, "complete", 181))
-	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", 180))
-	require.NoError(t, d.SetSessionDataVersion(ctx, "evener", 181))
+	require.NoError(t, d.SetSessionDataVersion(ctx, "complete", previous))
+	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", previous-1))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if err := writeUserVersion(ctx, tx, 181); err != nil {
+		if err := writeUserVersion(ctx, tx, previous); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, 181)
+		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, previous)
 		return err
 	}))
 	require.NoError(t, d.Close())
@@ -92,11 +138,11 @@ func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	assert.False(t, reopened.NeedsResync())
 	assert.Equal(t, SessionPushDataVersion, reopened.GetSessionDataVersion(ctx, "complete"))
-	assert.Equal(t, 180, reopened.GetSessionDataVersion(ctx, "retry"))
-	assert.Equal(t, 181, reopened.GetSessionDataVersion(ctx, "evener"))
+	assert.Equal(t, previous-1, reopened.GetSessionDataVersion(ctx, "retry"))
 	var pending int
 	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
-	assert.Equal(t, SessionPushDataVersion, pending)
+	// The marker keeps waiting for the full sync pass the earlier upgrade needs.
+	assert.Equal(t, previous, pending)
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
@@ -109,7 +155,7 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	const completedVersion = 145
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "completed Codex upgrade")
-	for _, agent := range []string{"codex", "pi", "hermes"} {
+	for _, agent := range []string{"codex", "pi", "vibe"} {
 		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
 		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, completedVersion))
 	}
@@ -122,7 +168,7 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	assert.False(t, reopened.NeedsResync())
-	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "hermes"))
+	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "vibe"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "codex"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }

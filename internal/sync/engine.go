@@ -42,6 +42,7 @@ type syncWriteMode int
 const (
 	syncWriteDefault syncWriteMode = iota
 	syncWriteBulk
+	syncWriteFirstImport
 )
 
 const (
@@ -503,7 +504,8 @@ type Engine struct {
 	// start of each ReconcileProviderRootsGrouped group; nil in production.
 	groupedReconcileGroupHook func(index int)
 	// pollScans holds the metadata snapshots polling compares between passes.
-	pollScans pollScanState
+	pollScans            pollScanState
+	unresolvedCodexForks unresolvedCodexForkTracker
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -1644,6 +1646,8 @@ func (e *Engine) syncChangedPathsLocked(
 	})
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
+	ctx = withSettleUnresolvedCodexForks(ctx)
+	paths = e.appendWaitingCodexForkPaths(ctx, paths)
 	e.invalidateNativeTitleCache(paths)
 	summary := e.beginChangedPathPass(paths)
 	prepared := e.prepareChangedPathSync(ctx, paths)
@@ -1761,6 +1765,11 @@ func (e *Engine) applyChangedPathSyncLocked(
 		tombstoned, tombstoneErr = e.tombstoneMissingWatchSourcesLocked(
 			ctx, prepared.missingPaths, nil,
 		)
+		if tombstoneErr == nil {
+			for _, missing := range prepared.missingPaths {
+				e.unresolvedCodexForks.forgetPath(missing)
+			}
+		}
 	}
 	if ctx.Err() == nil {
 		e.persistSkipCache(ctx)
@@ -3083,6 +3092,7 @@ func (e *Engine) ResetCachesAfterSwap(ctx context.Context) error {
 	e.clearTrustedSQLiteContainers()
 	e.clearTrustedOpenCodeStorageSessions()
 	e.clearVerifiedSources()
+	e.unresolvedCodexForks.clear()
 	e.clearPiebaldFailureMemo()
 	return e.ReloadSkipCache(ctx)
 }
@@ -3368,19 +3378,24 @@ func (e *Engine) syncThenRunLocked(
 	onProgress ProgressFunc,
 	work func(forceFull bool) error,
 ) (stats SyncStats, err error) {
+	writeMode := syncWriteDefault
+	wave := firstImportFromContext(ctx)
+	if wave != nil && wave.onWrite != nil {
+		writeMode = syncWriteFirstImport
+	}
 	didResync := full || e.db.NeedsResync()
 	if didResync {
 		stats = e.resyncAllLocked(ctx, onProgress)
 		if stats.Aborted && ctx.Err() == nil {
 			stats = e.syncAllLocked(
 				ctx, onProgress, time.Time{}, nil,
-				syncWriteDefault, true, false,
+				writeMode, true, false,
 			)
 		}
 	} else {
 		stats = e.syncAllLocked(
 			ctx, onProgress, time.Time{}, nil,
-			syncWriteDefault, true, false,
+			writeMode, true, false,
 		)
 	}
 	if ctx.Err() != nil {
@@ -3590,14 +3605,23 @@ func (e *Engine) recordStartupReconciled(
 			close(e.startupAttemptReady)
 		}
 	})
-	if !startupReconciliationSucceeded(ctx, stats, err) {
+	if err != nil || ctx.Err() != nil || !stats.AuthoritativeDiscoveryComplete() {
 		return
 	}
-	e.startupReconciledOnce.Do(func() {
-		if e.startupReconciledReady != nil {
-			close(e.startupReconciledReady)
-		}
-	})
+	pending, markerErr := e.db.GetSyncState(ctx, FirstImportPendingKey)
+	if markerErr == nil && pending == "1" {
+		markerErr = e.db.DeleteSyncState(ctx, FirstImportPendingKey)
+	}
+	if markerErr != nil {
+		log.Printf("clearing first import marker: %v", markerErr)
+	}
+	if startupReconciliationSucceeded(ctx, stats, err) {
+		e.startupReconciledOnce.Do(func() {
+			if e.startupReconciledReady != nil {
+				close(e.startupReconciledReady)
+			}
+		})
+	}
 }
 
 func startupReconciliationSucceeded(
@@ -3683,7 +3707,7 @@ func (e *Engine) StartupReconciled() bool {
 // completed without cancellation, safety abort, or provider listing failure.
 // Individual parser warnings do not make discovery incomplete.
 func (stats *SyncStats) AuthoritativeDiscoveryComplete() bool {
-	return !stats.Aborted && stats.providerFailures == 0
+	return !stats.Aborted && stats.providerFailures == stats.providerProcessingFailures
 }
 
 // ProcessingComplete reports whether all processed results reached a terminal
@@ -4149,8 +4173,17 @@ type ProviderRootsGroup struct {
 func (e *Engine) ReconcileProviderRootsGrouped(
 	ctx context.Context, groups []ProviderRootsGroup,
 ) error {
+	_, _, err := e.reconcileProviderRootsGroupedWithOutcomes(ctx, groups)
+	return err
+}
+
+func (e *Engine) reconcileProviderRootsGroupedWithOutcomes(
+	ctx context.Context, groups []ProviderRootsGroup,
+) ([]error, error, error) {
 	deferredCtx := context.WithValue(ctx, deferPassEpilogueContextKey{}, true)
+	groupErrs := make([]error, len(groups))
 	var errs []error
+	var epilogueErr error
 	changed := false
 	func() {
 		e.syncMu.Lock()
@@ -4184,7 +4217,9 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 			if agent == "" {
 				agent = "unscoped"
 			}
-			errs = append(errs, fmt.Errorf("reconcile %s roots: %w", agent, err))
+			wrapped := fmt.Errorf("reconcile %s roots: %w", agent, err)
+			groupErrs[i] = wrapped
+			errs = append(errs, wrapped)
 		}
 		// A canceled batch skips the epilogue entirely: linking and skip-cache
 		// persistence are not context-aware, and shutdown must not block on
@@ -4192,17 +4227,20 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		// persist on the next clean pass; the returned error keeps the batch
 		// from being mistaken for a completed one.
 		if err := ctx.Err(); err != nil {
-			errs = append(errs, fmt.Errorf(
+			epilogueErr = fmt.Errorf(
 				"grouped reconciliation epilogue skipped: %w", err,
-			))
+			)
+			errs = append(errs, epilogueErr)
 			return
 		}
 		if linkEligible {
 			linked, err := e.linkSubagentSessions(ctx)
 			if err != nil {
-				errs = append(errs, fmt.Errorf(
+				linkErr := fmt.Errorf(
 					"link subagent sessions after grouped reconciliation: %w", err,
-				))
+				)
+				epilogueErr = errors.Join(epilogueErr, linkErr)
+				errs = append(errs, linkErr)
 			} else if linked > 0 {
 				// The repair runs after per-group stats are folded into
 				// changed. A parent-only update still has to refresh clients.
@@ -4212,9 +4250,11 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		if repairEligible {
 			repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
 			if err != nil {
-				errs = append(errs, fmt.Errorf(
+				repairErr := fmt.Errorf(
 					"repair queued subagent parents after grouped reconciliation: %w", err,
-				))
+				)
+				epilogueErr = errors.Join(epilogueErr, repairErr)
+				errs = append(errs, repairErr)
 			} else if repaired > 0 {
 				changed = true
 			}
@@ -4232,7 +4272,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 	if changed {
 		e.emit("sessions")
 	}
-	return errors.Join(errs...)
+	return groupErrs, epilogueErr, errors.Join(errs...)
 }
 
 func (e *Engine) reconcileScopedWatchRoots(
@@ -4286,9 +4326,20 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		})
 		return SyncStats{}, 0, passEpilogueEligibility{}, nil
 	}
-	stats, metrics, tombstoned, eligibility, err := e.reconcileWatchRootsStreamedLocked(
+	stats, metrics, tombstoned, eligibility, wakePaths, err := e.reconcileWatchRootsStreamedLocked(
 		ctx, plans, fullCoverage, force, onProgress,
 	)
+	if len(wakePaths) > 0 && ctx.Err() == nil && !stats.Aborted {
+		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(ctx, wakePaths)
+		var merged SyncStats
+		mergeReconciliationSyncStats(&merged, stats)
+		mergeReconciliationSyncStats(&merged, wakeStats)
+		stats = merged
+		tombstoned += wakeTombstoned
+		if wakeErr != nil {
+			err = errors.Join(err, wakeErr)
+		}
+	}
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.ProcessingComplete()
@@ -4462,10 +4513,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	fullCoverage, force bool, onProgress ProgressFunc,
 ) (
 	stats SyncStats, metrics ReconciliationMetrics, tombstoned int,
-	eligibility passEpilogueEligibility, retErr error,
+	eligibility passEpilogueEligibility, wakePaths []string, retErr error,
 ) {
 	if err := ctx.Err(); err != nil {
-		return SyncStats{Aborted: true}, metrics, 0, eligibility, err
+		return SyncStats{Aborted: true}, metrics, 0, eligibility, nil, err
 	}
 	ctx = e.parsePolicyContext(ctx)
 	if force {
@@ -4490,10 +4541,11 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	ctx, closeProviderCache, err := parser.WithReconciliationCache(ctx)
 	if err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
+	ctx = withSettleUnresolvedCodexForks(ctx)
 	// Share S3 Codex parent downloads across every reconciliation page.
 	ctx, closeS3ParentCache := withS3CodexParentCache(ctx)
 	defer closeS3ParentCache()
@@ -4511,7 +4563,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	spool, err := e.reconciliationSpoolFactory(ctx, e.db.Path())
 	if err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	cleaned := false
 	defer func() {
@@ -4523,7 +4575,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
 	if err := e.prepareSQLiteContainerVerification(ctx, preContainerStates); err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	defer func() {
@@ -4548,7 +4600,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			err = errors.Join(err, cleanupErr)
 		}
 		cleaned = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	e.finishStreamingSQLiteContainerDiscovery()
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
@@ -4571,7 +4623,15 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 		}()
 	}
-	var cursor reconciliationCursor
+	var (
+		cursor          reconciliationCursor
+		reconciledRoots []string
+		seenWake        map[string]struct{}
+	)
+	if !fullCoverage && e.pathRewriter == nil {
+		reconciledRoots = reconciledCodexRoots(plans)
+		seenWake = make(map[string]struct{})
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			stats.Aborted = true
@@ -4597,6 +4657,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			break
 		}
 		runtimeMetrics.rehydrated(len(files))
+		if seenWake != nil {
+			e.collectCrossRootWaitingCodexForks(ctx, files, reconciledRoots, seenWake, &wakePaths)
+		}
 		if verifiedPass != 0 {
 			e.markVerifiedDiscoveredSources(files)
 		}
@@ -4814,7 +4877,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	cleaned = true
 	tombstoned += stats.Tombstoned
-	return stats, metrics, tombstoned, eligibility, retErr
+	return stats, metrics, tombstoned, eligibility, wakePaths, retErr
 }
 
 func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
@@ -6349,13 +6412,31 @@ func (e *Engine) syncAllLocked(
 		}()
 	}
 
+	wave := firstImportFromContext(ctx)
+	if wave != nil && wave.limit > 0 {
+		if err := e.firstImportSelect(ctx, dedupeDiscoveredFiles(all), scope, wave); err != nil {
+			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+		}
+		if wave.partial {
+			since = time.Unix(0, 1)
+		}
+	}
+
 	// Begin gate bookkeeping from the pre-filter discovery set: promotion
 	// needs a completion for every discovered session, so a cutoff-filtered
 	// pass must stay unpromotable (see opencode_container_gate.go).
 	e.beginSQLiteContainerPass(providerFound, preContainerStates)
 
 	quickSyncCutoff := !since.IsZero()
-	if quickSyncCutoff {
+	if wave != nil && wave.partial {
+		kept := all[:0]
+		for _, file := range all {
+			if _, ok := wave.selected[firstImportSource{file.Agent, file.Path}]; ok {
+				kept = append(kept, file)
+			}
+		}
+		all = kept
+	} else if quickSyncCutoff {
 		all = e.dedupeClaudeDiscoveredFiles(ctx, all)
 		// A Codex UUID can exist as both a live dated transcript and a flat
 		// archived copy. The provider's discovery deduplicates them to the
@@ -6379,6 +6460,26 @@ func (e *Engine) syncAllLocked(
 	if forceDiscoveredFiles {
 		for i := range all {
 			all[i].ForceParse = true
+		}
+	}
+	fileCount := len(all)
+	nonContainerDiscovered := 0
+	for _, f := range all {
+		if !isOpenCodeFormatContainerSource(f.Agent, f.Path) {
+			nonContainerDiscovered++
+		}
+	}
+	orderedFirstImport := wave != nil
+	if orderedFirstImport {
+		err := e.forEachFirstImportDBFile(ctx, scope, func(file parser.DiscoveredFile) {
+			if !wave.partial {
+				all = append(all, file)
+			} else if _, ok := wave.selected[firstImportSource{file.Agent, file.Path}]; ok {
+				all = append(all, file)
+			}
+		})
+		if err != nil {
+			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
 	}
 
@@ -6415,23 +6516,19 @@ func (e *Engine) syncAllLocked(
 		SessionsTotal: progressTotal,
 	})
 
-	nonContainerDiscovered := 0
-	for _, f := range all {
-		if !isOpenCodeFormatContainerSource(f.Agent, f.Path) {
-			nonContainerDiscovered++
-		}
-	}
-
 	tWorkers := time.Now()
 	// Discovery deduplicates sources before their freshness checks and writes.
 	// Cross-source parent-inventory demotions run after the workers finish.
 	if e.soleArchiveWriter.Load() {
 		ctx = e.withSourceFreshnessSnapshot(ctx, all)
 	}
-	results := e.startWorkers(ctx, all)
-	stats = e.collectAndBatch(
-		ctx, results, len(all), progressTotal, onProgress, writeMode,
-	)
+	options := collectAndBatchOptions{}
+	if wave != nil {
+		sortDiscoveredFilesByMtime(ctx, all)
+		options.afterWrite = wave.onWrite
+	}
+	stats = e.collectAndBatchWithOptions(ctx, e.startWorkers(ctx, all), len(all), progressTotal, onProgress, writeMode, options)
+	stats.filesDiscovered = fileCount
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
 	}
@@ -6481,10 +6578,16 @@ func (e *Engine) syncAllLocked(
 		SessionsDone:    stats.filesDiscovered,
 		MessagesIndexed: stats.messagesIndexed,
 	}
+	if orderedFirstImport {
+		dbProgress.SessionsDone = progressTotal
+	}
 
 	advanceDBProgress := func(total, indexedMessages int) {
 		if total == 0 {
 			return
+		}
+		if orderedFirstImport {
+			total = 0
 		}
 		progressTotal += total
 		dbProgress.SessionsTotal = progressTotal
@@ -7437,6 +7540,7 @@ func (e *Engine) syncProviderDBBacked(
 		return nil
 	}
 
+	wave := firstImportFromContext(ctx)
 	discovered, sourceFailures := 0, 0
 	piebaldDiscovered := make(map[string]struct{})
 	piebaldPruneRoots := roots
@@ -7448,6 +7552,11 @@ func (e *Engine) syncProviderDBBacked(
 		if agent == parser.AgentPiebald {
 			if key, _, ok := piebaldFailureSourcePaths(source); ok {
 				piebaldDiscovered[key] = struct{}{}
+			}
+		}
+		if wave != nil && wave.partial {
+			if _, ok := wave.selected[firstImportSource{agent, providerDiscoveredPath(source)}]; !ok {
+				return nil
 			}
 		}
 		var piebaldFailure piebaldFailureLookup
@@ -7646,7 +7755,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 			indexedMessages += len(pw.msgs)
 		}
 		tWrite := time.Now()
-		if writeMode == syncWriteBulk {
+		if writeMode == syncWriteBulk || writeMode == syncWriteFirstImport {
 			var outcome writeBatchOutcome
 			if e.writeBatchOverride != nil {
 				batchWritten, batchMessages, failedWrites, cwdFiltered := e.writeBatchOverride(pending, writeMode, true)
@@ -7702,9 +7811,8 @@ func (e *Engine) syncProviderDBBackedAgent(
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(
 		ctx, agent, scope, flush,
 	)
-	stats.providerFailures += sourceFailures
 	for range sourceFailures {
-		stats.RecordFailed()
+		stats.recordProviderProcessingFailure()
 	}
 	if discoveryErr != nil {
 		stats.providerFailures++
@@ -7745,6 +7853,9 @@ func (e *Engine) startWorkers(
 	// watcher sync needs one worker and one result slot, not a
 	// CPU-scaled pool with page-sized buffers of grown syncJob values.
 	workers := min(e.workerCount(), max(len(files), 1))
+	if firstImportFromContext(ctx) != nil {
+		workers = 1
+	}
 	buffer := min(max(workers*2, 1), max(len(files), 1))
 
 	jobs := make(chan parser.DiscoveredFile, buffer)
@@ -7852,8 +7963,18 @@ func (e *Engine) collectAndBatch(
 	)
 }
 
+// pendingBatchLimit flushes the first-import wave in small batches so
+// recent sessions become readable before the full wave completes.
+func pendingBatchLimit(ctx context.Context) int {
+	if wave := firstImportFromContext(ctx); wave != nil && wave.limit > 0 {
+		return 10
+	}
+	return batchSize
+}
+
 type collectAndBatchOptions struct {
 	observeResult func(syncJob)
+	afterWrite    func()
 }
 
 func (e *Engine) collectAndBatchWithOptions(
@@ -8191,6 +8312,9 @@ func (e *Engine) collectAndBatchWithOptions(
 				}
 			}
 			stats.RecordSynced(outcome.writtenSessions)
+			if outcome.writtenSessions > 0 && options.afterWrite != nil {
+				options.afterWrite()
+			}
 			for range outcome.failedSessions {
 				stats.RecordFailed()
 			}
@@ -8201,6 +8325,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				pending, outcome.writtenSessions, outcome.failedSessions,
 				outcome.cwdFiltered,
 			)
+			e.recordUnresolvedCodexForksAfterWrite(pending, outcome.written)
 			stats.cwdFilteredSessions += outcome.cwdFiltered
 			progress.MessagesIndexed += outcome.writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
@@ -8710,6 +8835,10 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceCwdStoredOK:       r.sourceCwdStoredOK,
 					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
 					sourceReserved:          reserved[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
+					verifiedCapture:         r.verifiedCapture,
+					verifiedMtime:           r.verifiedMtime,
+					verifiedStateOK:         r.verifiedStateOK,
+					unresolvedForkEpoch:     r.unresolvedForkEpoch,
 				}
 				if i == 0 && (atomicDAG || r.providerStatHash != nil) {
 					// Claude-compatible providers can emit several DAG branches
@@ -8761,7 +8890,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= batchSize ||
+			if len(pending) >= pendingBatchLimit(ctx) ||
 				(archiveRetention &&
 					pendingRetentionBytes >= pendingRetentionLimit) ||
 				(!archiveRetention && (budget.underPressure() ||
@@ -10660,6 +10789,10 @@ type pendingWrite struct {
 	sourceCwdResolution parser.SourceCwdResolution
 	sourceCwdStored     string
 	sourceCwdStoredOK   bool
+	verifiedCapture     verifiedSourceCapture
+	verifiedMtime       int64
+	verifiedStateOK     bool
+	unresolvedForkEpoch uint64
 }
 
 type sessionWriteIdentityReader interface {
@@ -11171,7 +11304,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 	if ctx.Err() != nil {
 		return outcome
 	}
-	if writeMode == syncWriteBulk || e.discardWritesOnCancel {
+	if writeMode == syncWriteBulk || writeMode == syncWriteFirstImport || e.discardWritesOnCancel {
 		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace)
 	}
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
@@ -12013,7 +12146,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
+		if pw.staged != nil {
 			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
 			if err != nil {
 				if isIntentionalSessionSkip(err) {
@@ -12025,95 +12158,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				continue
 			}
 			outcome.written[pendingIndex], outcome.resolved[pendingIndex] = true, true
-			outcome.writtenSessions++
-			outcome.writtenMessages += len(msgs)
-			continue
-		}
-		if pw.staged != nil {
-			// Staged streaming results bypass the bulk batch: their
-			// tool-result rows live in the staging scratch database and
-			// must be published through the staged transaction, which
-			// also persists the content-failure-aware signals in the
-			// same commit. A staged full parse always force-replaces.
-			// The bulk batch would normally create the session row, so
-			// mirror the standard write path's session upsert and
-			// post-write sequence here.
-			_, err := e.upsertSessionPendingContentForWrite(ctx, pw, s)
-			if err != nil {
-				if isIntentionalSessionSkip(err) {
-					if pw.sess.File.Path != "" {
-						e.cacheSkip(
-							pw.sess.File.Path,
-							pw.sess.File.Mtime,
-							pw.sess.File.Hash,
-						)
-					}
-					continue
-				}
-				log.Printf("upsert session %s: %v", s.ID, err)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			tWrite := time.Now()
-			err = e.writeStagedFullParse(ctx, s, msgs, pw, nil)
-			e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
-			if err != nil {
-				log.Printf(
-					"write staged session %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionUsageEvents(ctx,
-				s.ID, prepared.UsageEvents,
-			); err != nil {
-				log.Printf(
-					"write usage events for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionPlanUsage(ctx,
-				s.ID, prepared.PlanUsage,
-			); err != nil {
-				log.Printf(
-					"write plan usage for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionUsageTotal(ctx,
-				s.ID, prepared.SessionTotal,
-			); err != nil {
-				log.Printf(
-					"write session total for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.SetSessionDataVersion(ctx,
-				s.ID, dataVersionForWrite(pw),
-			); err != nil {
-				log.Printf(
-					"set data_version for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ClearSessionSourceMissing(ctx, s.ID); err != nil {
-				log.Printf(
-					"clear source-missing state for session %s: %v", s.ID, err,
-				)
-				outcome.failedSessions++
-				continue
-			}
-			outcome.written[pendingIndex] = true
 			outcome.writtenSessions++
 			outcome.writtenMessages += len(msgs)
 			continue
@@ -12355,6 +12399,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		if !outcome.written[0] {
 			return errSessionPreserved
 		}
+		e.recordUnresolvedCodexForksAfterWrite([]pendingWrite{pw}, outcome.written)
 		return nil
 	}
 	prepared, verdict, err := e.prepareSessionNormalizedContext(

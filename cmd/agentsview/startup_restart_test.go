@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,9 +108,14 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.scoped {
+				// Start below the newest version that reparses Claude; later
+				// versions may only guard the archive format.
 				oldVersion := db.CurrentDataVersion() - 1
-				require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()),
-					"fixture must exercise a scoped parser upgrade")
+				for oldVersion > 1 && !slices.Contains(db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()), parser.AgentClaude) {
+					oldVersion--
+				}
+				require.Contains(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()), parser.AgentClaude,
+					"fixture must exercise a scoped Claude reparse")
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
 				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'`)

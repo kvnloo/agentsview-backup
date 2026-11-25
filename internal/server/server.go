@@ -76,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 31
+	APIVersion = 32
 	// SyncPendingAPIVersion reports catch-up in sync status.
 	SyncPendingAPIVersion = 15
 	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
@@ -241,6 +241,7 @@ type Server struct {
 	telemetryCapture http.Handler
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	sessionPushMu          gosync.Mutex
 	rawSyncTenant          string
 	frictionRunner         *review.Runner
 	// The friction job runs its automatic filing passes sequentially.

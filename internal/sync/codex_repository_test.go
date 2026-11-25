@@ -42,6 +42,13 @@ func (p failingCodexDiscoveryProvider) Discover(ctx context.Context) ([]parser.S
 	return p.Provider.Discover(ctx)
 }
 
+func (p failingCodexDiscoveryProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
+	if *p.fail {
+		return errors.New("discovery failed")
+	}
+	return p.Provider.(parser.StreamingDiscoverer).DiscoverEach(ctx, yield)
+}
+
 func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -232,6 +239,44 @@ func TestCodexResyncRestoresResolvedSnapshots(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexScheduledReconciliationDiscoveryFailure(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	logs := filepath.Join(root, "logs")
+	sessions := filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions")
+	const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/checkout", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	previous, err := database.GetSyncState(t.Context(), codexLabelRootsKey)
+	require.NoError(t, err)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {logs}}})
+	fail := true
+	factories := engine.sources().providerFactories
+	factories[parser.AgentCodex] = failingCodexDiscoveryFactory{factories[parser.AgentCodex], &fail}
+	_, _, err = engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs}, false, false, nil)
+	require.Error(t, err)
+	stored, err := database.GetSyncState(t.Context(), codexLabelRootsKey)
+	require.NoError(t, err)
+	assert.Equal(t, previous, stored)
+	fail = false
+	stats, _, err := engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs}, false, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Synced)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team", session.Project)
+	stored, err = database.GetSyncState(t.Context(), codexLabelRootsKey)
+	require.NoError(t, err)
+	assert.NotEqual(t, previous, stored)
+	stats, _, err = engine.reconcileScopedWatchRoots(t.Context(), parser.AgentCodex, []string{logs}, false, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Synced)
 }
 
 func TestCodexScheduledReconciliationRefreshesLabels(t *testing.T) {

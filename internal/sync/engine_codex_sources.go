@@ -14,34 +14,31 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// refreshCodexLabelRoots marks changed labels for retry before recording the roots.
-func (e *Engine) refreshCodexLabelRoots(ctx context.Context) error {
+// refreshCodexLabelRoots marks changed labels for retry and returns roots to record.
+func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 	if e.ephemeral || slices.Contains(e.sources().preserveAgents, parser.AgentCodex) {
-		return nil
+		return "", nil
 	}
 	roots := slices.Sorted(slices.Values(e.sources().agentDirs[parser.AgentCodex]))
 	signature, err := json.Marshal(roots)
 	if err != nil {
-		return err
+		return "", err
 	}
 	stored, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if stored == string(signature) {
-		return nil
+		return "", nil
 	}
 	var previous []string
-	if stored != "" {
-		if err := json.Unmarshal([]byte(stored), &previous); err != nil {
-			log.Printf("codex label roots: ignoring invalid saved roots: %v", err)
-			previous = nil
-		}
+	if json.Unmarshal([]byte(stored), &previous) != nil {
+		previous = nil
 	}
 	if err := e.staleCodexLabels(ctx, previous, roots); err != nil {
-		return err
+		return "", err
 	}
-	return e.db.SetSyncState(ctx, codexLabelRootsKey, string(signature))
+	return string(signature), nil
 }
 
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.

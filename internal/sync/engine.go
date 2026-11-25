@@ -4312,8 +4312,10 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	if e.sourceSyncErr != nil {
 		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, e.sourceSyncErr
 	}
+	var labelRoots string
 	if agent == "" || agent == parser.AgentCodex {
-		if err := e.refreshCodexLabelRoots(ctx); err != nil {
+		var err error
+		if labelRoots, err = e.refreshCodexLabelRoots(ctx); err != nil {
 			return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, err
 		}
 	}
@@ -4353,6 +4355,10 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.ProcessingComplete()
+	if complete && labelRoots != "" {
+		err = e.db.SetSyncState(ctx, codexLabelRootsKey, labelRoots)
+		complete = err == nil
+	}
 	if err == nil && !complete {
 		err = errors.New("watch root reconciliation aborted")
 	}
@@ -6406,7 +6412,11 @@ func (e *Engine) syncAllLocked(
 		ctx, scope, preContainerStates,
 	)
 	if scope == nil && providerFailures == 0 {
-		if err := e.refreshCodexLabelRoots(ctx); err != nil {
+		labelRoots, err := e.refreshCodexLabelRoots(ctx)
+		if err == nil && labelRoots != "" {
+			err = e.db.SetSyncState(ctx, codexLabelRootsKey, labelRoots)
+		}
+		if err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
 	}

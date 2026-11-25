@@ -6346,17 +6346,15 @@ func (e *Engine) syncAllLocked(
 		return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
 	}
 	labelRoots := slices.Clone(e.sources().agentDirs[parser.AgentCodex])
-	remoteLabels := e.pathRewriter != nil && e.idPrefix != ""
-	labelKey := codexLabelRootsKey
-	if remoteLabels {
-		labelKey += ":" + e.idPrefix
+	labelSignature, signatureErr := codexLabelRootSignature(labelRoots)
+	if signatureErr != nil {
+		log.Printf("encode Codex label roots: %v", signatureErr)
 	}
-	labelSignature := codexLabelRootSignature(labelRoots, e.pathRewriter)
-	storedLabelSignature, err := e.db.GetSyncState(ctx, labelKey)
+	storedLabelSignature, err := e.db.GetSyncState(ctx, codexLabelRootsKey)
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
 	}
-	refreshLabels := scope == nil && storedLabelSignature != labelSignature && (!e.ephemeral || remoteLabels && e.completeSourceMirror)
+	refreshLabels := scope == nil && signatureErr == nil && storedLabelSignature != labelSignature && !e.ephemeral
 	labelPassComplete := false
 	defer func() {
 		if err := closeProviderCache(); err != nil {
@@ -6365,7 +6363,7 @@ func (e *Engine) syncAllLocked(
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
 		if labelPassComplete && ctx.Err() == nil {
-			if err := e.db.SetSyncState(ctx, labelKey, labelSignature); err != nil {
+			if err := e.db.SetSyncState(ctx, codexLabelRootsKey, labelSignature); err != nil {
 				log.Printf("persist Codex label roots: %v", err)
 			}
 		}
@@ -11117,15 +11115,6 @@ func (e *Engine) preserveUnavailableSourceProjects(
 					snapshot.RootPath, sourceProjectPreservationCwd(batch[i]),
 				) {
 				continue
-			}
-			if sess.Agent == parser.AgentCodex && sess.SessionKind != parser.SessionKindRoborev && parser.CodexProjectIsSourceLabel(sess.File.Path, snapshot.Project) {
-				stored, err := e.db.GetSession(ctx, id)
-				if err != nil {
-					return batch, fmt.Errorf("load session for Codex label: %w", err)
-				}
-				if stored != nil && stored.SessionKind == parser.SessionKindRoborev {
-					continue
-				}
 			}
 			sess.Project = snapshot.Project
 		}

@@ -906,27 +906,6 @@ func CodexSourceLabel(root, path string) string {
 	return label
 }
 
-// CodexProjectIsSourceLabel reports whether project is the label in a Codex run path.
-func CodexProjectIsSourceLabel(sourcePath, project string) bool {
-	if project == "" {
-		return false
-	}
-	sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
-	marker := strings.LastIndex(sourcePath, "/.codex-run-v1-")
-	if marker < 0 {
-		return false
-	}
-	root := sourcePath[:marker]
-	if project != "." {
-		suffix := "/" + project
-		if !strings.HasSuffix(root, suffix) {
-			return false
-		}
-		root = strings.TrimSuffix(root, suffix) + "/"
-	}
-	return CodexSourceLabel(filepath.FromSlash(root), filepath.FromSlash(sourcePath)) == project
-}
-
 // CodexSourceLabelForRoots uses the outermost matching root for the label.
 func CodexSourceLabelForRoots(roots []string, path string) string {
 	_, label := CodexSourceLabelRoot(roots, path)

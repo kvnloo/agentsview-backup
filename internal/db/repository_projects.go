@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -106,7 +108,7 @@ func (r *repositoryProjectResolver) name(ctx context.Context, remote string) (re
 		if err := rows.Scan(&project, &root, &relationship, &recorded, &agent, &sourcePath); err != nil {
 			return name, err
 		}
-		if agent == string(parser.AgentCodex) && parser.CodexProjectIsSourceLabel(sourcePath, project) {
+		if codexProjectIsSourceLabel(agent, sourcePath, project) {
 			continue
 		}
 		if recorded != "" {
@@ -141,6 +143,26 @@ func (r *repositoryProjectResolver) name(ctx context.Context, remote string) (re
 type repositoryProjectCandidate struct {
 	worktreeMappingSessionUpdate
 	remote, agent, sourcePath string
+}
+
+func codexProjectIsSourceLabel(agent, sourcePath, project string) bool {
+	if agent != string(parser.AgentCodex) || project == "" {
+		return false
+	}
+	sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
+	marker := strings.LastIndex(sourcePath, "/.codex-run-v1-")
+	if marker < 0 {
+		return false
+	}
+	root := sourcePath[:marker]
+	if project != "." {
+		suffix := "/" + project
+		if !strings.HasSuffix(root, suffix) {
+			return false
+		}
+		root = strings.TrimSuffix(root, suffix) + "/"
+	}
+	return parser.CodexSourceLabel(filepath.FromSlash(root), filepath.FromSlash(sourcePath)) == project
 }
 
 func repositoryProjectCandidates(ctx context.Context, tx *sql.Tx, sessionID, project string) ([]repositoryProjectCandidate, error) {
@@ -182,7 +204,7 @@ func repositoryProjectCandidates(ctx context.Context, tx *sql.Tx, sessionID, pro
 }
 
 func (r *repositoryProjectResolver) resolve(ctx context.Context, c repositoryProjectCandidate) (repositoryProjectName, bool, error) {
-	if c.agent == string(parser.AgentCodex) && parser.CodexProjectIsSourceLabel(c.sourcePath, c.currentProject) {
+	if codexProjectIsSourceLabel(c.agent, c.sourcePath, c.currentProject) {
 		return repositoryProjectName{}, false, nil
 	}
 	mappings, ok := r.mappings[c.machine]

@@ -677,7 +677,7 @@ func (e *Engine) refuseWriteInForceParse(op string) bool {
 // skip cache entries has already run on this database.
 const codexExecMigrationKey = "codex_exec_legacy_migration_v1"
 
-const codexLabelRootsKey = "codex_label_roots_v2"
+const codexLabelRootsKey = "codex_label_roots_v1"
 
 // visualStudioCopilotSkipMigrationKey is the pg_sync_state flag
 // that records whether the one-time cleanup of Visual Studio
@@ -6349,7 +6349,7 @@ func (e *Engine) syncAllLocked(
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
-		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil && stats.ProcessingComplete() {
+		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil {
 			if finalSignature := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter); finalSignature == labelSignature {
 				if err := e.db.SetSyncState(ctx, labelKey, labelSignature); err != nil {
 					log.Printf("persist Codex label roots: %v", err)
@@ -6403,12 +6403,22 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures := e.discoverProviderSources(
+	providerFound, providerFailures, codexDiscoveryFailed := e.discoverProviderSources(
 		ctx, scope, preContainerStates,
 	)
 	if scope == nil && storedLabelSignature != labelSignature {
 		var previousRoots []string
 		knownRoots := json.Unmarshal([]byte(storedLabelSignature), &previousRoots) == nil
+		_, codexEnabled := e.sources().providerFactories[parser.AgentCodex]
+		if codexEnabled && (!e.ephemeral || remoteLabels && e.completeSourceMirror) {
+			var currentRoots []string
+			if err := json.Unmarshal([]byte(labelSignature), &currentRoots); err != nil {
+				return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+			}
+			if err := e.staleCodexLabels(ctx, previousRoots, currentRoots, knownRoots); err != nil {
+				return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+			}
+		}
 		for i := range providerFound {
 			file := &providerFound[i]
 			if file.Agent != parser.AgentCodex {
@@ -6420,7 +6430,7 @@ func (e *Engine) syncAllLocked(
 			}
 			label := parser.CodexSourceLabelForRoots(labelRoots, file.Path)
 			if knownRoots && label != parser.CodexSourceLabelForRoots(previousRoots, path) ||
-				!knownRoots && (label != "" || db.CodexProjectIsSourceLabel(string(file.Agent), file.Path, ".")) {
+				!knownRoots && (label != "" || parser.CodexProjectIsSourceLabel(file.Path, ".")) {
 				file.ForceParse = true
 			}
 		}
@@ -6764,7 +6774,7 @@ func (e *Engine) syncAllLocked(
 		}
 	}
 	_, codexEnabled := e.sources().providerFactories[parser.AgentCodex]
-	labelPassComplete = codexEnabled && scope == nil && (!e.ephemeral || remoteLabels && e.completeSourceMirror) && (wave == nil || !wave.partial)
+	labelPassComplete = codexEnabled && !codexDiscoveryFailed && scope == nil && (!e.ephemeral || remoteLabels && e.completeSourceMirror) && (wave == nil || !wave.partial)
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats
@@ -11105,7 +11115,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 				) {
 				continue
 			}
-			if sess.SessionKind != parser.SessionKindRoborev && db.CodexProjectIsSourceLabel(string(sess.Agent), sess.File.Path, snapshot.Project) {
+			if sess.Agent == parser.AgentCodex && sess.SessionKind != parser.SessionKindRoborev && parser.CodexProjectIsSourceLabel(sess.File.Path, snapshot.Project) {
 				stored, err := e.db.GetSession(ctx, id)
 				if err != nil {
 					return batch, fmt.Errorf("load session for Codex label: %w", err)

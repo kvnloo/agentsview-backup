@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -25,7 +27,13 @@ func codexLabelRootSignature(ctx context.Context, roots []string, rewrite func(s
 			available = append(available, root)
 			continue
 		}
-		if _, err := os.ReadDir(root); err != nil {
+		dir, err := os.Open(root)
+		if err != nil {
+			continue
+		}
+		_, err = dir.Readdirnames(1)
+		closeErr := dir.Close()
+		if err != nil && !errors.Is(err, io.EOF) || closeErr != nil {
 			continue
 		}
 		if rewrite != nil {
@@ -36,6 +44,42 @@ func codexLabelRootSignature(ctx context.Context, roots []string, rewrite func(s
 	slices.Sort(available)
 	signature, _ := json.Marshal(available)
 	return string(signature)
+}
+
+// staleCodexLabels keeps affected sources eligible until their reparse succeeds.
+func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string, knownRoots bool) error {
+	scopes := make([]db.StoredSourcePathHintScope, 0, len(current))
+	for _, root := range current {
+		scopes = append(scopes, db.StoredSourcePathHintScope{Path: root})
+	}
+	paths, err := e.db.ListStoredSourcePathHintsContext(ctx, string(parser.AgentCodex), scopes)
+	if err != nil {
+		return err
+	}
+	staleVersion := max(db.CurrentDataVersion()-1, 0)
+	for _, path := range paths {
+		label := parser.CodexSourceLabelForRoots(current, path)
+		if knownRoots && label == parser.CodexSourceLabelForRoots(previous, path) ||
+			!knownRoots && label == "" && !parser.CodexProjectIsSourceLabel(path, ".") {
+			continue
+		}
+		ids, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			session, err := e.db.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			if session != nil && session.DataVersion > staleVersion {
+				if err := e.db.SetSessionDataVersion(ctx, id, staleVersion); err != nil {
+					return fmt.Errorf("mark Codex source stale: %w", err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

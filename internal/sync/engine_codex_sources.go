@@ -34,7 +34,8 @@ func (e *Engine) refreshCodexLabelRoots(ctx context.Context) error {
 	var previous []string
 	if stored != "" {
 		if err := json.Unmarshal([]byte(stored), &previous); err != nil {
-			return err
+			log.Printf("codex label roots: ignoring invalid saved roots: %v", err)
+			previous = nil
 		}
 	}
 	if err := e.staleCodexLabels(ctx, previous, roots); err != nil {

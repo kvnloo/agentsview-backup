@@ -6405,7 +6405,7 @@ func (e *Engine) syncAllLocked(
 	providerFound, providerFailures := e.discoverProviderSources(
 		ctx, scope, preContainerStates,
 	)
-	if scope == nil {
+	if scope == nil && providerFailures == 0 {
 		if err := e.refreshCodexLabelRoots(ctx); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}

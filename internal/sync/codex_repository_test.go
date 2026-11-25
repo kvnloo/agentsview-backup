@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +20,27 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+type failingCodexDiscoveryFactory struct {
+	parser.ProviderFactory
+	fail *bool
+}
+
+func (f failingCodexDiscoveryFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return failingCodexDiscoveryProvider{Provider: f.ProviderFactory.NewProvider(cfg), fail: f.fail}
+}
+
+type failingCodexDiscoveryProvider struct {
+	parser.Provider
+	fail *bool
+}
+
+func (p failingCodexDiscoveryProvider) Discover(ctx context.Context) ([]parser.SourceRef, error) {
+	if *p.fail {
+		return nil, errors.New("discovery failed")
+	}
+	return p.Provider.Discover(ctx)
+}
 
 func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 	database := openTestDB(t)
@@ -101,6 +125,40 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		f := setup(t, false)
 		require.NoError(t, f.database.DeleteSyncState(t.Context(), codexLabelRootsKey))
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("invalid signature", func(t *testing.T) {
+		f := setup(t, false)
+		require.NoError(t, f.database.SetSyncState(t.Context(), codexLabelRootsKey, "invalid{"))
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("discovery failure", func(t *testing.T) {
+		f := setup(t, false)
+		previous, err := f.database.GetSyncState(t.Context(), codexLabelRootsKey)
+		require.NoError(t, err)
+		fail := true
+		factories := f.engine.sources().providerFactories
+		factories[parser.AgentCodex] = failingCodexDiscoveryFactory{factories[parser.AgentCodex], &fail}
+		stats := f.engine.SyncAll(t.Context(), nil)
+		assert.Positive(t, stats.providerFailures)
+		stored, err := f.database.GetSyncState(t.Context(), codexLabelRootsKey)
+		require.NoError(t, err)
+		assert.Equal(t, previous, stored)
+		fail = false
+		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+	})
+	t.Run("renamed root", func(t *testing.T) {
+		f := setup(t, true)
+		renamed := filepath.Join(f.parent, "renamed")
+		require.NoError(t, os.Rename(f.root, renamed))
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {renamed}}})
+		sync := f.engine.SyncAll(t.Context(), nil)
+		require.False(t, sync.Aborted, "%v", sync.Warnings)
+		require.Zero(t, sync.Failed)
+		session, err := f.database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "team", session.Project)
+		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 	})
 	t.Run("unchanged root", func(t *testing.T) {
 		f := setup(t, true)

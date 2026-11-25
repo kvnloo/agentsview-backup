@@ -1460,10 +1460,14 @@ repeats the history it inherited.
 
 From a CodeBuddy session, **Resume** runs `codebuddy --resume <session>` with
 the CLI session id, and the menu offers **Open in CodeBuddy CN** and **Open in
-CodeBuddy CN Insiders** when those IDEs are installed. Preserved branches, side
-questions, subagents, and unconverted 4.x conversations have no CLI session, so
-the menu does not offer to resume them. Deleting or archiving a conversation in
-CodeBuddy does not remove it from AgentsView.
+CodeBuddy CN Insiders** when those IDEs are installed. On Linux, an IDE entry
+also needs the desktop to open that IDE's links, so `xdg-mime query default
+x-scheme-handler/codebuddycn` (or `codebuddycn-insiders`) must name a desktop
+file. A host the IDE reaches over SSH has the `buddycn` command but no such
+handler, so it does not offer them. Preserved branches, side questions,
+subagents, and unconverted 4.x conversations have no CLI session, so the menu
+does not offer to resume them. Deleting or archiving a conversation in CodeBuddy
+does not remove it from AgentsView.
 
 Session projects use the working directory when present, falling back to the
 workspace identifier. A transcript, saved tool output, or catalog change

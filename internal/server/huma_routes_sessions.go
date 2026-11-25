@@ -1002,7 +1002,7 @@ func (s *Server) humaOpenSession(
 	if projectDir == "" {
 		return nil, apiError(http.StatusBadRequest, "session has no project directory")
 	}
-	openers := detectOpeners()
+	openers := detectOpeners(ctx)
 	var opener *Opener
 	for i := range openers {
 		if openers[i].ID == in.Body.OpenerID {
@@ -2010,7 +2010,7 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 	launchDir string,
 	openerID string,
 ) (*jsonOutput[resumeResponse], error) {
-	openers := detectOpeners()
+	openers := detectOpeners(ctx)
 	var opener *Opener
 	for i := range openers {
 		if openers[i].ID == openerID {

@@ -5774,6 +5774,12 @@ schemas keep their existing ordering behavior.
     `sessionId` (stored as `source_session_id`). The IDE opens
     `<scheme>://codebuddy-ide/conversation/open?id=<conversation id>`, with the
     id matching `^[A-Za-z0-9_-]{1,128}$` (IDE `codebuddyConversationDeepLink`).
+    On Linux, AgentsView opens it with `xdg-open`, so
+    `internal/server/openers.go` lists an IDE only when `xdg-mime query default
+    x-scheme-handler/<scheme>` names a desktop file. A Linux host the IDE
+    reaches over SSH was checked on 2026-11-26: `buddycn` and
+    `buddycn-insiders` were the remote server's CLI scripts on `PATH`, and
+    neither scheme had a handler.
     Catalog rows with a `workspace_authority` belong to another machine and are
     ignored. Discussion entries follow genie's `sanitizeDiscussionEntry` and
     `isValidAnchor`.

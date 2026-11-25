@@ -191,7 +191,7 @@ func TestRepositoryProjectAttribution(t *testing.T) {
 	assert.Equal(t, "sample", cleared.Project)
 
 	labeled, labeledObs := repositorySession("labeled", "checkout", "https://example.com/team/checkout.git")
-	path := filepath.Join("/logs", "team", ".codex-run-v1-abc", "sessions", "rollout.jsonl")
+	path := filepath.Join("/logs", "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")
 	labeled.FilePath = &path
 	require.NoError(t, d.UpsertSessionWithProjectIdentity(ctx, labeled, labeledObs, labeled.Project))
 	labeled.Project = "team"
@@ -202,6 +202,12 @@ func TestRepositoryProjectAttribution(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "team", got.Project)
+	_, err = d.RestoreSessionProjectsFromIdentitySnapshots(ctx, nil)
+	require.NoError(t, err)
+	got, err = d.GetSessionFull(ctx, labeled.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "checkout", got.Project)
 }
 
 func TestRepositoryProjectAttributionPreservesFolderRules(t *testing.T) {

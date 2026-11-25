@@ -439,7 +439,7 @@ func TestCodeBuddyCBCRemoteServerSideQuestions(t *testing.T) {
 	transcript := filepath.Join(project, "run-a.jsonl")
 	writeCBC(t, transcript,
 		`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-a","content":[{"type":"input_text","text":"hi"}]}`,
-		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}]}`)
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}],"providerData":{"conversationRequestId":"r1","messageId":"m1","rawUsage":{"prompt_tokens":500,"completion_tokens":40}}}`)
 	// The IDE's remote server writes the side-question tables keyed by
 	// runtime session id, without the conversations catalog.
 	db, err := sql.Open("sqlite3", filepath.Join(home, CodeBuddyCatalogDBName))
@@ -458,10 +458,15 @@ func TestCodeBuddyCBCRemoteServerSideQuestions(t *testing.T) {
 
 	results := parseCBCHome(t, home)
 	require.Len(t, results, 3, "the main session, its /btw thread, and its discussion")
+	main := cbcSession(t, results, "codebuddy:run-a")
+	assert.Equal(t, 40, main.Session.TotalOutputTokens)
 	btw := cbcSession(t, results, "codebuddy:run-a:btw")
 	assert.Equal(t, "codebuddy:run-a", btw.Session.ParentSessionID)
 	require.Len(t, btw.Messages, 2)
 	assert.Equal(t, "side a", btw.Messages[1].Content)
+	assert.False(t, btw.Session.HasTotalOutputTokens || btw.Session.HasPeakContextTokens,
+		"a side thread does not repeat the conversation's token totals")
+	assert.Empty(t, btw.Session.SourceSessionID, "a side thread has no CLI session to resume")
 	assert.Equal(t, "codebuddy:run-a",
 		cbcSession(t, results, "codebuddy:run-a:discussion:d1").Session.ParentSessionID)
 

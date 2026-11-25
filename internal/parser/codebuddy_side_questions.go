@@ -74,15 +74,14 @@ func codebuddySideSession(
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].createdAt.Before(ordered[j].createdAt)
 	})
-	sess := main
-	sess.ID = main.ID + ":" + suffix
-	sess.ParentSessionID = main.ID
-	sess.RelationshipType = RelFork
-	sess.SourceSessionID = ""
-	sess.SessionKind = kind
-	sess.IsTruncated = false
-	sess.TerminationStatus = ""
-	sess.MalformedLines = 0
+	// A side thread shares the conversation's place and source file but none
+	// of its counts: its own messages carry no usage.
+	sess := ParsedSession{
+		ID: main.ID + ":" + suffix, Project: main.Project, Machine: main.Machine,
+		Agent: main.Agent, Entrypoint: main.Entrypoint, Cwd: main.Cwd,
+		File: main.File, ParentSessionID: main.ID, RelationshipType: RelFork,
+		SessionKind: kind,
+	}
 	var msgs []ParsedMessage
 	if quote != "" {
 		text := "> " + strings.ReplaceAll(strings.TrimSpace(quote), "\n", "\n> ")

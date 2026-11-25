@@ -709,7 +709,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
 // (190: include retained tool calls in pull request links.)
-const dataVersion = 190
+// (191: classify Muse Personal runs that Muse started itself from the source
+// of their first user item, stored as session_kind muse-background. Re-parse
+// Muse Personal sources in place; source and session identities are
+// unchanged.)
+const dataVersion = 191
 
 const archiveOnlyVersionBase = 1 << 20
 

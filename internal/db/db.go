@@ -708,7 +708,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // canonical input_image blocks so image retention, offload, and image_text
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
-const dataVersion = 189
+// (190: classify Muse Personal runs that Muse started itself from the source
+// of their first user item, stored as session_kind muse-background. Re-parse
+// Muse Personal sources in place; source and session identities are
+// unchanged.)
+const dataVersion = 190
 
 const archiveOnlyVersionBase = 1 << 20
 

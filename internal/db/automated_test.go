@@ -24,6 +24,7 @@ func TestIsAutomatedSessionMetadata(t *testing.T) {
 	}{
 		{"NonInteractive", parser.SessionKindNonInteractive, false},
 		{"Roborev", parser.SessionKindRoborev, true},
+		{"MuseBackground", parser.SessionKindMuseBackground, true},
 		{"EmptyKind", "", false},
 		{"Background", "bg", false},
 	}

@@ -75,7 +75,7 @@ const AutomationEvidencePrefixBytes = userPatternMaxLen
 // metadata that explicitly identifies an automated invocation.
 func IsAutomatedSessionMetadata(sessionKind string) bool {
 	switch sessionKind {
-	case parser.SessionKindRoborev:
+	case parser.SessionKindRoborev, parser.SessionKindMuseBackground:
 		return true
 	default:
 		return false

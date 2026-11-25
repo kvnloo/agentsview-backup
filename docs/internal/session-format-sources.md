@@ -5730,6 +5730,10 @@ schemas keep their existing ordering behavior.
     `context-usage`, terminal state). `<home>/codebuddy.db` is the IDE catalog:
     `conversations` (titles, `fork_source_id`, remote `workspace_authority`),
     `conversation_runtime_sources`, `btw_entries`, and `discussion_threads`.
+    On a host the IDE reaches over SSH, the IDE's remote server writes the
+    same file without `conversations` or `conversation_runtime_sources`;
+    its `btw_entries` and `discussion_threads` rows are keyed by the
+    runtime session id that names the transcript.
     User images are `image_blob_ref` blocks naming
     `<home>/blobs/<first two hex>/<sha256>.<ext>`; converted 4.x images are
     `codebuddy-asset://assets/<name>` in the 4.x conversation directory.
@@ -5752,7 +5756,13 @@ schemas keep their existing ordering behavior.
   CN Insiders 1.122.1 (`out/main.js`, sha256
   `de37c273536963cb6a69ab13565ccae5b79d7a1ebb49cdd7fb21678c50bf871b`), and the
   bundled genie extension 3.10.0 (`out/extension/index.js`, sha256
-  `b67cb4014b1cd0a9aa5e71ce31eadf7383e18889201bd3fc7be59c771affa5ff`).
+  `b67cb4014b1cd0a9aa5e71ce31eadf7383e18889201bd3fc7be59c771affa5ff`). The
+  remote-server layout was read on 2026-11-25 from the Linux x64 CodeBuddy CN
+  1.122.1 server (`out/vs/code/node/codebuddyNativeChatWorker/index.js`,
+  sha256 `d4526698fd8e6d6250e1f4c8600e4d119a6407e998f5bbb9c01eaffb6b7a254c`),
+  which opens `codebuddy.db` and creates each side-question table on first
+  use, and from a server-written catalog whose `btw_entries` key matched a
+  transcript stem.
   - CBC replay follows the CLI's `resolveReplayHistory` and `getActiveHistory`:
     a trailing `resend-fork-notice` ends history at the notice's parent;
     otherwise a file with parent links and a resend or content filter walks back
@@ -5795,11 +5805,14 @@ schemas keep their existing ordering behavior.
   synthetic fixtures in `internal/parser/codebuddy_cbc_test.go` (replay,
   branches, classification, images, persisted outputs, titles, catalog metadata,
   side questions, converted sessions, catalog change selection),
+  including a remote-server catalog without `conversations`,
   `internal/sync/codebuddy_cbc_integration_test.go` (usage deduplication across
   forks, converted sessions, catalog renames, late and removed side files,
   source deletion), and `internal/remotesync/codebuddy_test.go` (remote targets
   and import). A local corpus of 1,961 sources (903 CBC) parsed with no
-  failures. Some `/btw` entries record only an image count; those images were
+  failures. A headless Linux host with CLI 2.146.0 and a remote-server catalog
+  synced 210 sessions with no failures, and its `/btw` entries attached to
+  their transcript. Some `/btw` entries record only an image count; those images were
   never stored. IDE 4.x behavior was reverified on 2026-09-17 with
   `internal/parser/codebuddy_test.go` and
   `internal/sync/codebuddy_integration_test.go`: equal-size rewrites with

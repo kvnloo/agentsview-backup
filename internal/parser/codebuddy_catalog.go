@@ -16,10 +16,13 @@ import (
 )
 
 // CodeBuddyCatalogDBName is the IDE 5.x conversation catalog kept beside the
-// CBC projects directory. The CLI alone does not write it.
+// CBC projects directory. The CLI alone does not write it. The IDE's remote
+// server writes the same file with only the side-question tables.
 const CodeBuddyCatalogDBName = "codebuddy.db"
 
-// codebuddyCatalogEntry is one local conversation's catalog metadata.
+// codebuddyCatalogEntry is one local conversation's catalog metadata. An
+// entry read from a catalog without the conversations table has no
+// conversationID, so the IDE cannot open it.
 type codebuddyCatalogEntry struct {
 	conversationID  string
 	runtimeID       string
@@ -206,24 +209,37 @@ func readCodeBuddyCatalog(ctx context.Context, path string) (*codebuddyCatalog, 
 		return nil, err
 	}
 	catalog := &codebuddyCatalog{byRuntime: make(map[string]*codebuddyCatalogEntry)}
-	if !tables["conversations"] {
-		return catalog, nil
-	}
-	byConversation, err := readCodeBuddyConversations(ctx, db, catalog)
-	if err != nil {
-		return nil, err
-	}
-	if tables["conversation_runtime_sources"] {
-		if err := readCodeBuddyRuntimeSources(ctx, db, catalog, byConversation); err != nil {
+	// The IDE's remote server keeps side questions without the
+	// conversations table, keyed by the runtime session id that names the
+	// transcript. Those rows get entries of their own.
+	byConversation := make(map[string]*codebuddyCatalogEntry)
+	payloadKeysAreRuntimeIDs := !tables["conversations"]
+	if !payloadKeysAreRuntimeIDs {
+		byConversation, err = readCodeBuddyConversations(ctx, db, catalog)
+		if err != nil {
 			return nil, err
 		}
-	}
-	// fork_source_id names the parent conversation; archive ids follow the
-	// parent's runtime session, which names its transcript.
-	for _, entry := range byConversation {
-		if parent := byConversation[entry.forkParentRawID]; parent != nil {
-			entry.forkParentRawID = parent.runtimeID
+		if tables["conversation_runtime_sources"] {
+			if err := readCodeBuddyRuntimeSources(ctx, db, catalog, byConversation); err != nil {
+				return nil, err
+			}
 		}
+		// fork_source_id names the parent conversation; archive ids follow
+		// the parent's runtime session, which names its transcript.
+		for _, entry := range byConversation {
+			if parent := byConversation[entry.forkParentRawID]; parent != nil {
+				entry.forkParentRawID = parent.runtimeID
+			}
+		}
+	}
+	entryFor := func(key string) *codebuddyCatalogEntry {
+		if entry := byConversation[key]; entry != nil || !payloadKeysAreRuntimeIDs {
+			return entry
+		}
+		entry := &codebuddyCatalogEntry{runtimeID: key}
+		byConversation[key] = entry
+		catalog.byRuntime[key] = entry
+		return entry
 	}
 	for table, apply := range map[string]func(*codebuddyCatalogEntry, string){
 		"btw_entries": func(e *codebuddyCatalogEntry, payload string) {
@@ -236,7 +252,7 @@ func readCodeBuddyCatalog(ctx context.Context, path string) (*codebuddyCatalog, 
 		if !tables[table] {
 			continue
 		}
-		if err := readCodeBuddyPayloads(ctx, db, table, byConversation, apply); err != nil {
+		if err := readCodeBuddyPayloads(ctx, db, table, entryFor, apply); err != nil {
 			return nil, err
 		}
 	}
@@ -359,7 +375,7 @@ func readCodeBuddyRuntimeSources(
 
 func readCodeBuddyPayloads(
 	ctx context.Context, db *sql.DB, table string,
-	byConversation map[string]*codebuddyCatalogEntry,
+	entryFor func(string) *codebuddyCatalogEntry,
 	apply func(*codebuddyCatalogEntry, string),
 ) error {
 	rows, err := db.QueryContext(ctx,
@@ -373,7 +389,10 @@ func readCodeBuddyPayloads(
 		if err := rows.Scan(&conversation, &payload); err != nil {
 			return err
 		}
-		if entry := byConversation[conversation]; entry != nil {
+		if conversation == "" {
+			continue
+		}
+		if entry := entryFor(conversation); entry != nil {
 			apply(entry, payload)
 		}
 	}
@@ -468,7 +487,7 @@ func CodeBuddyIDEConversationID(
 		return "", false, err
 	}
 	entry := catalog.byRuntime[runtimeID]
-	if entry == nil || entry.deleted {
+	if entry == nil || entry.deleted || entry.conversationID == "" {
 		return "", false, nil
 	}
 	return entry.conversationID, true, nil

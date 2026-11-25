@@ -1430,7 +1430,10 @@ Tencent CodeBuddy CN uses the `codebuddy` agent ID for three clients:
   under `~/.codebuddy/projects/`. Subagent transcripts sit beside them.
 - **The IDE 5.x catalog** (`~/.codebuddy/codebuddy.db`) supplies the titles you
   set in the IDE, forked-conversation links, and `/btw` and discussion side
-  questions. A CLI-only install has no catalog; its transcripts still import.
+  questions. A CLI-only install has no catalog; its transcripts still import. On
+  a machine you reach from the IDE over SSH, the catalog holds only side
+  questions, so those conversations keep their transcript titles and cannot be
+  opened in the IDE from AgentsView.
 - **IDE 4.x** keeps conversations under `history` in `CodeBuddyExtension/Data`.
   On Windows, the default follows `%LOCALAPPDATA%`, falling back to
   `~/AppData/Local` when that variable is unset or not absolute. macOS uses

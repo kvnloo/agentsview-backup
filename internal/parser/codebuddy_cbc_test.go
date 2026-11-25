@@ -434,6 +434,42 @@ func clearCodeBuddyCatalogCache() {
 	codebuddyCatalogCache.Unlock()
 }
 
+func TestCodeBuddyCBCRemoteServerSideQuestions(t *testing.T) {
+	home, project := cbcHome(t)
+	transcript := filepath.Join(project, "run-a.jsonl")
+	writeCBC(t, transcript,
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-a","content":[{"type":"input_text","text":"hi"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}]}`)
+	// The IDE's remote server writes the side-question tables keyed by
+	// runtime session id, without the conversations catalog.
+	db, err := sql.Open("sqlite3", filepath.Join(home, CodeBuddyCatalogDBName))
+	require.NoError(t, err)
+	for _, stmt := range []string{
+		`CREATE TABLE btw_entries (conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+		`CREATE TABLE discussion_threads (conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+		`INSERT INTO btw_entries VALUES ('run-a', '[{"id":"b1","question":"side q","answer":"side a","createdAt":2000}]', 1)`,
+		`INSERT INTO btw_entries VALUES ('run-gone', '[{"id":"b2","question":"orphan","createdAt":2000}]', 1)`,
+		`INSERT INTO discussion_threads VALUES ('run-a', '[{"id":"d1","anchor":{"quote":"hello","messageId":"a1"},"createdAt":2500,"entries":[{"id":"e1","question":"why?","answer":"because","createdAt":2500}]}]', 1)`,
+	} {
+		_, err := db.ExecContext(t.Context(), stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, db.Close())
+
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 3, "the main session, its /btw thread, and its discussion")
+	btw := cbcSession(t, results, "codebuddy:run-a:btw")
+	assert.Equal(t, "codebuddy:run-a", btw.Session.ParentSessionID)
+	require.Len(t, btw.Messages, 2)
+	assert.Equal(t, "side a", btw.Messages[1].Content)
+	assert.Equal(t, "codebuddy:run-a",
+		cbcSession(t, results, "codebuddy:run-a:discussion:d1").Session.ParentSessionID)
+
+	_, ok, err := CodeBuddyIDEConversationID(t.Context(), transcript, "run-a")
+	require.NoError(t, err)
+	assert.False(t, ok, "without the conversations table the IDE has no conversation to open")
+}
+
 func TestCodeBuddyCBCUnreadableCatalogKeepsLastGoodRead(t *testing.T) {
 	home, project := cbcHome(t)
 	writeCBC(t, filepath.Join(project, "run-a.jsonl"),

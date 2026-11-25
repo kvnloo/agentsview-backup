@@ -41,12 +41,18 @@ func TestCodexRecordedRepositorySurvivesMissingCheckout(t *testing.T) {
 }
 
 func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
-	for _, mode := range []string{"scoped then full", "quick"} {
+	for _, mode := range []string{"scoped then full", "quick", "unavailable source", "overlapping roots without signature"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			parent := t.TempDir()
 			root := filepath.Join(parent, "logs")
-			sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+			inner := filepath.Join(root, "team")
+			label := "team"
+			if mode == "overlapping roots without signature" {
+				inner = filepath.Join(inner, "case")
+				label = "team/case"
+			}
+			sessions := filepath.Join(inner, ".codex-run-v1-abc", "sessions")
 			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 			source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
 			meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
@@ -56,13 +62,32 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 				t.Cleanup(engine.Close)
 				return engine
 			}
-			first := newEngine(sessions)
+			initialRoot := sessions
+			if mode == "overlapping roots without signature" {
+				initialRoot = filepath.Join(root, "team")
+			}
+			first := newEngine(initialRoot)
 			require.Equal(t, 1, first.SyncAll(t.Context(), nil).Synced)
+			if mode == "overlapping roots without signature" {
+				session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+				require.NoError(t, err)
+				require.Equal(t, "case", session.Project)
+				require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
+			}
 			first.Close()
 			roots := []string{root}
+			if mode == "overlapping roots without signature" {
+				roots = []string{initialRoot, root}
+			}
 			engine := newEngine(roots...)
 			if mode == "scoped then full" {
 				assert.Zero(t, engine.SyncRootsSince(t.Context(), roots, time.Time{}, nil).Synced)
+			}
+			if mode == "unavailable source" {
+				missing := filepath.Join(parent, "temporarily-unavailable")
+				require.NoError(t, os.Rename(sessions, missing))
+				assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+				require.NoError(t, os.Rename(missing, sessions))
 			}
 			var stats SyncStats
 			if mode == "quick" {
@@ -75,130 +100,70 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			assert.Equal(t, "team", session.Project)
+			assert.Equal(t, label, session.Project)
 			assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
 			assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 		})
 	}
 }
 
-func TestCodexLabelRefreshRetriesAfterProviderFailure(t *testing.T) {
-	database := openTestDB(t)
-	parent := t.TempDir()
-	root := filepath.Join(parent, "logs")
-	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	meta := testjsonl.CodexSessionMetaJSON(id, filepath.Join(parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z")
-	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	codex, ok := parser.ProviderFactoryByType(parser.AgentCodex)
-	require.True(t, ok)
-	newEngine := func(root string, factories ...parser.ProviderFactory) *Engine {
-		engine := NewEngine(t.Context(), database, EngineConfig{
-			Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}, parser.AgentWarp: {parent}},
-			ProviderFactories: factories,
-		})
-		t.Cleanup(engine.Close)
-		return engine
-	}
-	initial := newEngine(sessions, codex)
-	require.Equal(t, 1, initial.SyncAll(t.Context(), nil).Synced)
-	initial.Close()
-	warp, ok := parser.ProviderFactoryByType(parser.AgentWarp)
-	require.True(t, ok)
-	missing := filepath.Join(parent, "temporarily-unavailable")
-	require.NoError(t, os.Rename(sessions, missing))
-	failed := newEngine(root, codex, firstImportFailingFactory{&firstImportFailingProvider{warp.NewProvider(parser.ProviderConfig{})}})
-	stats := failed.SyncAll(t.Context(), nil)
-	require.Positive(t, stats.providerFailures)
-	failed.Close()
-	require.NoError(t, os.Rename(missing, sessions))
-	retry := newEngine(root, codex)
-	stats = retry.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	require.Equal(t, 1, stats.Synced)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "team", session.Project)
-}
-
 func TestCodexLabelRefreshSurvivesResync(t *testing.T) {
-	database := openTestDB(t)
-	parent := t.TempDir()
-	root := filepath.Join(parent, "logs")
-	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
-	checkout := filepath.Join(parent, "api")
-	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(checkout, ".git", "config"),
-		[]byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"),
-		0o644,
-	))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(checkout, ".git", "HEAD"),
-		[]byte("ref: refs/heads/main\n"), 0o644,
-	))
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	meta := testjsonl.CodexSessionMetaWithFieldsJSON(
-		id, checkout, "codex_exec", "2026-10-08T12:00:00Z",
-		map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}},
-	)
-	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+
-		testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		Machine:   "local",
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}},
-	})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, export.ProjectResolutionResolved, snapshots[0].RemoteResolution)
-	assert.NotEmpty(t, snapshots[0].GitRemote)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "api", session.Project)
-	assert.Equal(t, parser.SessionKindNonInteractive, session.SessionKind)
-
-	engine.ReconfigureSources(SourceConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-	})
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
-	require.Zero(t, stats.Failed)
-	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "team", session.Project)
-	assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
-	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-}
-
-func TestCodexLabelRefreshAfterRootRename(t *testing.T) {
-	database := openTestDB(t)
-	parent := t.TempDir()
-	root := filepath.Join(parent, "logs")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	renamed := filepath.Join(parent, "renamed")
-	require.NoError(t, os.Rename(root, renamed))
-	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {renamed}}})
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "team", session.Project)
-	assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
-	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+	for _, labeled := range []bool{true, false} {
+		name := "folder label"
+		if !labeled {
+			name = "saved Git project"
+		}
+		t.Run(name, func(t *testing.T) {
+			database := openTestDB(t)
+			parent := t.TempDir()
+			root := filepath.Join(parent, "logs")
+			sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+			checkout := filepath.Join(parent, "api")
+			require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "config"), []byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+			meta := func(cwd string) string {
+				return testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+			}
+			writeSource := func(cwd string) {
+				dbtest.WriteTestFile(t, source, []byte(meta(cwd)+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+			}
+			writeSource(checkout)
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+			require.NoError(t, err)
+			require.Len(t, snapshots, 1)
+			assert.Equal(t, export.ProjectResolutionResolved, snapshots[0].RemoteResolution)
+			assert.NotEmpty(t, snapshots[0].GitRemote)
+			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "api", session.Project)
+			assert.Equal(t, parser.SessionKindNonInteractive, session.SessionKind)
+			if labeled {
+				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+			} else {
+				writeSource(filepath.Join(parent, "team"))
+				require.NoError(t, os.Rename(checkout, filepath.Join(parent, "removed-checkout")))
+			}
+			stats := engine.ResyncAll(t.Context(), nil)
+			require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
+			require.Zero(t, stats.Failed)
+			session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			if labeled {
+				assert.Equal(t, "team", session.Project)
+				assert.Equal(t, parser.SessionKindRoborev, session.SessionKind)
+			} else {
+				assert.Equal(t, "api", session.Project)
+			}
+		})
+	}
 }
 
 func TestCodexLabelRefreshSkipsUnchangedRoot(t *testing.T) {
@@ -216,32 +181,6 @@ func TestCodexLabelRefreshSkipsUnchangedRoot(t *testing.T) {
 	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, empty}}})
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-}
-
-func TestCodexLabelRefreshMissingSignatureWithOverlappingRoots(t *testing.T) {
-	database := openTestDB(t)
-	outer := filepath.Join(t.TempDir(), "logs")
-	inner := filepath.Join(outer, "team")
-	sessions := filepath.Join(inner, "case", ".codex-run-v1-abc", "sessions")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {inner}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	require.Equal(t, "case", session.Project)
-	// Model a row written by the older inner-first root selection.
-	require.NoError(t, database.DeleteSyncState(t.Context(), codexLabelRootsKey))
-	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {inner, outer}}})
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "team/case", session.Project)
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
 

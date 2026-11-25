@@ -20,6 +20,8 @@ var (
 	codebuddyLocalCommandRe   = regexp.MustCompile(`(?s)^<local-command-(?:stdout|stderr)>.*</local-command-(?:stdout|stderr)>$`)
 	codebuddyAskAnswerLineRe  = regexp.MustCompile(`^\s*·\s*(.*?)\s*→\s*(.*)$`)
 	codebuddyCompactSummaryRe = regexp.MustCompile(`(?i)<cb_summary\b|<conversation_history_summary\b|data-role=["']compact-summary["']`)
+	codebuddyTeammateTagRe    = regexp.MustCompile(`<teammate-message\b[^>]*>|</teammate-message\s*>`)
+	codebuddyTeammateSummary  = regexp.MustCompile(`^<teammate-message\b[^>]*\bsummary="([^"]*)"`)
 )
 
 // codebuddyCBCUserText is the classified text of one user message.
@@ -116,6 +118,49 @@ func classifyCodeBuddyCBCUser(it codebuddyCBCItem) codebuddyCBCUserText {
 		out.subtype = "local_command_output"
 	}
 	return out
+}
+
+// codebuddyInternalUser reports whether a user item is a producer-internal
+// prompt rather than a turn anyone sent.
+func codebuddyInternalUser(it codebuddyCBCItem) bool {
+	pd := it.providerData()
+	return pd.Get("skipRun").Bool() || pd.Get("isCompactInternal").Bool() ||
+		pd.Get("agent").Str == "compact" || pd.Get("isMeta").Bool()
+}
+
+// codebuddyTeamTaskAssignment finds the item that gave a team subagent its
+// task. The lead starts a teammate by sending the task as a teammate message
+// (CLI formatTeammateMessage with summary "Initial task assignment for
+// <member>"), so a subagent transcript whose first prompt is a teammate
+// message opens with its assignment rather than a peer reply.
+func codebuddyTeamTaskAssignment(items []codebuddyCBCItem) (int, bool) {
+	for _, it := range items {
+		if it.itemType != "message" || it.role != "user" || codebuddyInternalUser(it) {
+			continue
+		}
+		user := classifyCodeBuddyCBCUser(it)
+		if user.prompt == "" && len(user.images) == 0 {
+			continue
+		}
+		if user.subtype == "peer_message" &&
+			strings.HasPrefix(user.prompt, "<teammate-message") {
+			return it.index, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+// codebuddyTeammateText returns a teammate message without its wrapper,
+// falling back to the summary attribute when the body is empty.
+func codebuddyTeammateText(prompt string) string {
+	if body := strings.TrimSpace(codebuddyTeammateTagRe.ReplaceAllString(prompt, "")); body != "" {
+		return body
+	}
+	if m := codebuddyTeammateSummary.FindStringSubmatch(prompt); m != nil {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
 }
 
 // splitCodeBuddyCBCUserText separates one text block into prompt text and

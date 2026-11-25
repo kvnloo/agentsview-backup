@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-25
+last_edited: 2026-11-26
 ---
 
 # Session Format Source Inventory
@@ -5783,6 +5783,19 @@ schemas keep their existing ordering behavior.
     Catalog rows with a `workspace_authority` belong to another machine and are
     ignored. Discussion entries follow genie's `sanitizeDiscussionEntry` and
     `isValidAnchor`.
+  - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
+    member name, otherwise the subagent preset name. The CLI writes that name
+    to each subagent item's `providerData.agent`; main transcripts carry
+    `cli`, `craft`, or `codebuddy-ide-4.x` there instead. Only some older
+    transcripts also keep `session-meta` `meta.teamContext.memberName`, which
+    wins when present. A team subagent's first user item holds a
+    `<system-reminder data-role="team-context">` block followed by the lead's
+    task, wrapped by `formatTeammateMessage` as `<teammate-message
+    teammate_id="team-lead" summary="Initial task assignment for <member>">`.
+    AgentsView keeps the reminder as a system row and treats that first
+    teammate message as the subagent's prompt: its body without the wrapper is
+    the first message and fallback title. Every later teammate message, and
+    every teammate message in a main transcript, stays a peer message.
 - **Usage and cost:** Monetary cost is catalog-derived for both families.
   - CBC: `rawUsage` wins over normalized `usage`. `prompt_tokens` includes cache
     reads (`prompt_tokens_details.cached_tokens`, `prompt_cache_hit_tokens`,
@@ -5809,8 +5822,9 @@ schemas keep their existing ordering behavior.
     context size.
 - **Verification boundary:** CBC behavior was verified on 2026-11-25 with
   synthetic fixtures in `internal/parser/codebuddy_cbc_test.go` (replay,
-  branches, classification, images, persisted outputs, titles, catalog metadata,
-  side questions, converted sessions, catalog change selection),
+  branches, classification, team subagent names and task assignments, images,
+  persisted outputs, titles, catalog metadata, side questions, converted
+  sessions, catalog change selection),
   including a remote-server catalog without `conversations`,
   `internal/sync/codebuddy_cbc_integration_test.go` (usage deduplication across
   forks, converted sessions, catalog renames, late and removed side files,
@@ -5819,7 +5833,10 @@ schemas keep their existing ordering behavior.
   failures. A headless Linux host with CLI 2.146.0 and a remote-server catalog
   synced 210 sessions with no failures, and its `/btw` entries attached to
   their transcript. Some `/btw` entries record only an image count; those images were
-  never stored. IDE 4.x behavior was reverified on 2026-09-17 with
+  never stored. Subagent naming was rechecked on 2026-11-26 against the same
+  local corpus: 433 of 435 CBC subagents carry a name, and all 435 have a first
+  message; the two unnamed ones are converted 4.x subagents, whose items carry
+  only `codebuddy-ide-4.x`. IDE 4.x behavior was reverified on 2026-09-17 with
   `internal/parser/codebuddy_test.go` and
   `internal/sync/codebuddy_integration_test.go`: equal-size rewrites with
   restored modification times invalidate stored freshness and warm skip caches;

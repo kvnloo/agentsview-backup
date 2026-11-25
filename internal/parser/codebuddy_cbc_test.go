@@ -679,3 +679,74 @@ func FuzzCodeBuddyCBCTranscript(f *testing.F) {
 		assert.LessOrEqual(t, total, 16*len(data)+4096)
 	})
 }
+
+// cbcTeamAssignment is a lead's first message to a team subagent: the
+// team-context reminder followed by the task as a teammate message.
+const cbcTeamAssignment = `[{"type":"input_text","text":"<system-reminder data-role=\"team-context\">\n# Agent Teammate Communication\n\nYou are **Explore-1**, a teammate in team **_auto_s9**.\n</system-reminder>"},{"type":"input_text","text":"<teammate-message teammate_id=\"team-lead\" summary=\"Initial task assignment for Explore-1\">\nMap the build scripts\n</teammate-message>"}]`
+
+func TestCodeBuddyCBCTeamSubagentNames(t *testing.T) {
+	for _, tc := range []struct {
+		name, meta, agent, wantLabel string
+	}{
+		{"label from the producer's speaker", `{}`, "Explore-1", "Explore-1"},
+		{"team member name wins", `{"teamContext":{"memberName":"reviewer","teamName":"t"}}`, "general-purpose", "reviewer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, project := cbcHome(t)
+			pd := `{"conversationRequestId":"r1","rootRequestId":"root","agent":"` + tc.agent + `"}`
+			writeCBC(t, filepath.Join(project, "s9", "subagents", "agent-x.jsonl"),
+				`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":`+cbcTeamAssignment+`,"providerData":`+pd+`}`,
+				`{"type":"session-meta","id":"m1","sessionId":"agent-x","meta":`+tc.meta+`}`,
+				`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"Two scripts."}],"providerData":`+pd+`}`,
+				`{"id":"u2","parentId":"a1","type":"message","role":"user","timestamp":1002,"content":[{"type":"input_text","text":"<teammate-message teammate_id=\"team-lead\" summary=\"Follow-up\">\nAlso the tests\n</teammate-message>"}],"providerData":`+pd+`}`,
+			)
+			results := parseCBCHome(t, home)
+			require.Len(t, results, 1)
+			s := results[0].Session
+			assert.Equal(t, RelSubagent, s.RelationshipType)
+			assert.Equal(t, tc.wantLabel, s.AgentLabel)
+			assert.Equal(t, "Map the build scripts", s.FirstMessage)
+			assert.Equal(t, "Map the build scripts", s.SessionName)
+			assert.Equal(t, 1, s.UserMessageCount)
+
+			msgs := results[0].Messages
+			require.Len(t, msgs, 4)
+			assert.Equal(t, "system_reminder", msgs[0].SourceSubtype)
+			assert.Contains(t, msgs[0].Content, "Agent Teammate Communication")
+			assert.False(t, msgs[1].IsSystem, "the task assignment is the subagent's prompt")
+			assert.Equal(t, "user", msgs[1].SourceType)
+			assert.Contains(t, msgs[1].Content, "Map the build scripts")
+			assert.True(t, msgs[3].IsSystem, "later lead messages stay peer messages")
+			assert.Equal(t, "peer_message", msgs[3].SourceSubtype)
+		})
+	}
+}
+
+func TestCodeBuddyCBCTeammateMessagesOutsideAssignments(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s10.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"Split the work"}],"providerData":{"agent":"cli"}}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"Started a teammate."}],"providerData":{"agent":"cli"}}`,
+		`{"id":"u2","parentId":"a1","type":"message","role":"user","timestamp":1002,"content":[{"type":"input_text","text":"<teammate-message teammate_id=\"Explore-1\" summary=\"done\">\nFound two scripts\n</teammate-message>"}],"providerData":{"agent":"cli","teammateMessage":{"from":"Explore-1"}}}`,
+	)
+	writeCBC(t, filepath.Join(project, "s10", "subagents", "agent-y.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"Review the diff"}],"providerData":{"agent":"general-purpose"}}`,
+		`{"id":"u2","parentId":"u1","type":"message","role":"user","timestamp":1001,"content":[{"type":"input_text","text":"<teammate-message teammate_id=\"team-lead\" summary=\"note\">\nskip docs\n</teammate-message>"}],"providerData":{"agent":"general-purpose"}}`,
+	)
+	results := parseCBCHome(t, home)
+	main := cbcSession(t, results, "codebuddy:s10")
+	assert.Empty(t, main.Session.AgentLabel, "a main session has no subagent name")
+	assert.Equal(t, "Split the work", main.Session.FirstMessage)
+	assert.Equal(t, 1, main.Session.UserMessageCount)
+	require.Len(t, main.Messages, 3)
+	assert.True(t, main.Messages[2].IsSystem)
+	assert.Equal(t, "peer_message", main.Messages[2].SourceSubtype)
+
+	child := cbcSession(t, results, "codebuddy:s10:subagent:agent-y")
+	assert.Equal(t, "general-purpose", child.Session.AgentLabel)
+	assert.Equal(t, "Review the diff", child.Session.FirstMessage)
+	assert.Equal(t, 1, child.Session.UserMessageCount)
+	require.Len(t, child.Messages, 2)
+	assert.Equal(t, "peer_message", child.Messages[1].SourceSubtype,
+		"a teammate message after a typed prompt is not an assignment")
+}

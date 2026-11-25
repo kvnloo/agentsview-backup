@@ -65,6 +65,10 @@ type codebuddyCBCTranscript struct {
 	converted  bool
 	teamMember string
 	teamName   string
+	// speaker is the first providerData.agent naming a run other than the
+	// main CLI, IDE, or compaction agent; in a subagent transcript it is the
+	// subagent's display name.
+	speaker    string
 	stopReason string
 }
 
@@ -164,8 +168,12 @@ func (t *codebuddyCBCTranscript) observe(root gjson.Result) {
 	if cwd := root.Get("cwd").Str; t.cwd == "" && cwd != "" {
 		t.cwd = cwd
 	}
+	agent := strings.TrimSpace(root.Get("providerData.agent").Str)
+	if t.speaker == "" && agent != "" && !codebuddyRuntimeAgents[agent] {
+		t.speaker = agent
+	}
 	if t.entrypoint == "" {
-		switch root.Get("providerData.agent").Str {
+		switch agent {
 		case "cli":
 			t.entrypoint = "cli"
 		case "craft":
@@ -174,6 +182,14 @@ func (t *codebuddyCBCTranscript) observe(root gjson.Result) {
 			t.entrypoint = "ide-4.x"
 		}
 	}
+}
+
+// codebuddyRuntimeAgents are providerData.agent values that name the main
+// run or an internal step rather than a subagent. The producer otherwise
+// stamps each subagent item with the team member name, or with the subagent
+// preset name when the run is not a team member.
+var codebuddyRuntimeAgents = map[string]bool{
+	"cli": true, "craft": true, "codebuddy-ide-4.x": true, "compact": true,
 }
 
 func (t *codebuddyCBCTranscript) observeMeta(root gjson.Result) {

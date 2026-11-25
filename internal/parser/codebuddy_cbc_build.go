@@ -26,6 +26,10 @@ type codebuddyCBCBuildOptions struct {
 	// legacyUsage holds a converted conversation's 4.x request totals keyed
 	// by the 4.x assistant message id that recorded them.
 	legacyUsage map[string]ParsedMessage
+	// taskAssignment is the index of the item that delivered a team
+	// subagent's task; hasTaskAssignment is false when there is none.
+	taskAssignment    int
+	hasTaskAssignment bool
 }
 
 // codebuddyCBCBuilt is the conversion of one replayed path.
@@ -389,8 +393,13 @@ func (b *codebuddyCBCBuilder) flush() {
 }
 
 func (b *codebuddyCBCBuilder) addUser(it codebuddyCBCItem) {
-	pd := it.providerData()
 	user := classifyCodeBuddyCBCUser(it)
+	assignment := b.opts.hasTaskAssignment && it.index == b.opts.taskAssignment
+	if assignment {
+		// The lead's task assignment is the subagent's first prompt, as a
+		// typed prompt is for a main session.
+		user.subtype = ""
+	}
 	images := b.imageMarkdown(user.images)
 	prompt := user.prompt
 	if images != "" {
@@ -402,9 +411,7 @@ func (b *codebuddyCBCBuilder) addUser(it codebuddyCBCItem) {
 	if prompt == "" {
 		return
 	}
-	internal := pd.Get("skipRun").Bool() || pd.Get("isCompactInternal").Bool() ||
-		pd.Get("agent").Str == "compact" || pd.Get("isMeta").Bool()
-	if user.subtype != "" || internal {
+	if user.subtype != "" || codebuddyInternalUser(it) {
 		subtype := user.subtype
 		if subtype == "" {
 			subtype = "system_reminder"
@@ -424,6 +431,9 @@ func (b *codebuddyCBCBuilder) addUser(it codebuddyCBCItem) {
 	}
 	if b.built.firstMessage == "" {
 		first := user.prompt
+		if assignment {
+			first = codebuddyTeammateText(first)
+		}
 		if first == "" {
 			first = "[Image]"
 		}

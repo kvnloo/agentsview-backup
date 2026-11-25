@@ -72,6 +72,9 @@ func parseCodeBuddyCBCFile(
 			in.opts.assets = codebuddyBlobAssets{legacyAssets: companion.assetsDir}
 		}
 	}
+	if ident.subagent {
+		in.opts.taskAssignment, in.opts.hasTaskAssignment = codebuddyTeamTaskAssignment(t.items)
+	}
 	active := codebuddyCBCReplay(t.items)
 	main, err := buildCodeBuddyCBCMessages(ctx, t.items, active, in.opts)
 	if err != nil {
@@ -106,6 +109,8 @@ func parseCodeBuddyCBCFile(
 	}
 	if t.teamMember != "" {
 		base.AgentLabel = t.teamMember
+	} else if ident.subagent {
+		base.AgentLabel = t.speaker
 	}
 	if ident.subagent {
 		base.ParentSessionID = "codebuddy:" + ident.parentRawID

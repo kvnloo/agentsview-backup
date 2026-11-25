@@ -21,4 +21,3 @@ describe("codebuddyCanContinue", () => {
     expect(codebuddyCanContinue({ agent: "claude" })).toBe(true);
   });
 });
-

@@ -14,9 +14,6 @@ export function codebuddyCanContinue(
 ): boolean {
   if (session.agent !== "codebuddy") return true;
   return (
-    !!session.source_session_id &&
-    !session.session_kind &&
-    session.relationship_type !== "subagent"
+    !!session.source_session_id && !session.session_kind && session.relationship_type !== "subagent"
   );
 }
-

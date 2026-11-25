@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,33 +15,17 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// codexLabelRootSignature changes when a configured local root becomes readable.
-func codexLabelRootSignature(ctx context.Context, roots []string, rewrite func(string) string) string {
-	available := make([]string, 0, len(roots))
+// codexLabelRootSignature records the configured roots in stored-path form.
+func codexLabelRootSignature(roots []string, rewrite func(string) string) string {
+	stored := make([]string, 0, len(roots))
 	for _, root := range roots {
-		if ctx.Err() != nil {
-			return ""
-		}
-		if strings.HasPrefix(root, "s3://") {
-			available = append(available, root)
-			continue
-		}
-		dir, err := os.Open(root)
-		if err != nil {
-			continue
-		}
-		_, err = dir.Readdirnames(1)
-		closeErr := dir.Close()
-		if err != nil && !errors.Is(err, io.EOF) || closeErr != nil {
-			continue
-		}
 		if rewrite != nil {
 			root = rewrite(root)
 		}
-		available = append(available, root)
+		stored = append(stored, root)
 	}
-	slices.Sort(available)
-	signature, _ := json.Marshal(available)
+	slices.Sort(stored)
+	signature, _ := json.Marshal(stored)
 	return string(signature)
 }
 
@@ -56,28 +39,21 @@ func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []strin
 	if err != nil {
 		return err
 	}
-	staleVersion := max(db.CurrentDataVersion()-1, 0)
+	var ids []string
 	for _, path := range paths {
 		label := parser.CodexSourceLabelForRoots(current, path)
 		if knownRoots && label == parser.CodexSourceLabelForRoots(previous, path) ||
 			!knownRoots && label == "" && !parser.CodexProjectIsSourceLabel(path, ".") {
 			continue
 		}
-		ids, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))
+		pathIDs, err := e.db.ListSessionIDsByFilePath(ctx, path, string(parser.AgentCodex))
 		if err != nil {
 			return err
 		}
-		for _, id := range ids {
-			session, err := e.db.GetSession(ctx, id)
-			if err != nil {
-				return err
-			}
-			if session != nil && session.DataVersion > staleVersion {
-				if err := e.db.SetSessionDataVersion(ctx, id, staleVersion); err != nil {
-					return fmt.Errorf("mark Codex source stale: %w", err)
-				}
-			}
-		}
+		ids = append(ids, pathIDs...)
+	}
+	if err := e.db.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0)); err != nil {
+		return fmt.Errorf("mark Codex sources stale: %w", err)
 	}
 	return nil
 }

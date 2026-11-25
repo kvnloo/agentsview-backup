@@ -102,7 +102,7 @@ func TestDiscoverProviderSourcesThreadsS3TranscriptMetadata(t *testing.T) {
 	})
 	t.Cleanup(e.Close)
 
-	files, failures, _ := e.discoverProviderSources(t.Context(), nil, nil)
+	files, failures := e.discoverProviderSources(t.Context(), nil, nil)
 	require.Zero(t, failures)
 	require.Len(t, files, 1)
 	assert.Equal(t, int64(2048), files[0].TranscriptSize)

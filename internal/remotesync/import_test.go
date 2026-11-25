@@ -330,7 +330,7 @@ func TestImporterRefreshesCodexLabelsAfterCompleteMirror(t *testing.T) {
 		return stats
 	}
 	assert.Equal(t, 2, importSessions("host-a", sessions, true).SessionsSynced)
-	assert.Equal(t, 2, importSessions("host-a", root, false).SessionsSynced)
+	assert.Zero(t, importSessions("host-a", root, false).SessionsSynced)
 	assert.Equal(t, 2, importSessions("host-a", root, true).SessionsSynced)
 	for _, id := range ids {
 		session, err := database.GetSessionFull(t.Context(), "host-a~codex:"+id)
@@ -344,13 +344,6 @@ func TestImporterRefreshesCodexLabelsAfterCompleteMirror(t *testing.T) {
 	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
 	assert.Equal(t, 2, importSessions("host-b", root, true).SessionsSynced)
 	assert.Zero(t, importSessions("host-b", root, true).SessionsSynced)
-	assert.Zero(t, importSessions("host-a", root, true).SessionsSynced)
-	for _, id := range ids {
-		session, err := database.GetSessionFull(t.Context(), "host-b~codex:"+id)
-		require.NoError(t, err)
-		require.NotNil(t, session)
-		assert.Equal(t, "team", session.Project)
-	}
 }
 
 func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {

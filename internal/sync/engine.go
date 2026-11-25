@@ -6351,11 +6351,12 @@ func (e *Engine) syncAllLocked(
 	if remoteLabels {
 		labelKey += ":" + e.idPrefix
 	}
-	labelSignature := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter)
+	labelSignature := codexLabelRootSignature(labelRoots, e.pathRewriter)
 	storedLabelSignature, err := e.db.GetSyncState(ctx, labelKey)
 	if err != nil {
 		log.Printf("load Codex label roots: %v", err)
 	}
+	refreshLabels := scope == nil && storedLabelSignature != labelSignature && (!e.ephemeral || remoteLabels && e.completeSourceMirror)
 	labelPassComplete := false
 	defer func() {
 		if err := closeProviderCache(); err != nil {
@@ -6363,11 +6364,9 @@ func (e *Engine) syncAllLocked(
 			stats.RecordFailed()
 			stats.Warnings = append(stats.Warnings, err.Error())
 		}
-		if labelPassComplete && storedLabelSignature != labelSignature && ctx.Err() == nil {
-			if finalSignature := codexLabelRootSignature(ctx, labelRoots, e.pathRewriter); finalSignature == labelSignature {
-				if err := e.db.SetSyncState(ctx, labelKey, labelSignature); err != nil {
-					log.Printf("persist Codex label roots: %v", err)
-				}
+		if labelPassComplete && ctx.Err() == nil {
+			if err := e.db.SetSyncState(ctx, labelKey, labelSignature); err != nil {
+				log.Printf("persist Codex label roots: %v", err)
 			}
 		}
 	}()
@@ -6417,36 +6416,15 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures, codexDiscoveryFailed := e.discoverProviderSources(
+	providerFound, providerFailures := e.discoverProviderSources(
 		ctx, scope, preContainerStates,
 	)
-	if scope == nil && storedLabelSignature != labelSignature {
-		var previousRoots []string
+	if refreshLabels {
+		var previousRoots, currentRoots []string
 		knownRoots := json.Unmarshal([]byte(storedLabelSignature), &previousRoots) == nil
-		_, codexEnabled := e.sources().providerFactories[parser.AgentCodex]
-		if codexEnabled && (!e.ephemeral || remoteLabels && e.completeSourceMirror) {
-			var currentRoots []string
-			if err := json.Unmarshal([]byte(labelSignature), &currentRoots); err != nil {
-				return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
-			}
-			if err := e.staleCodexLabels(ctx, previousRoots, currentRoots, knownRoots); err != nil {
-				return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
-			}
-		}
-		for i := range providerFound {
-			file := &providerFound[i]
-			if file.Agent != parser.AgentCodex {
-				continue
-			}
-			path := file.Path
-			if e.pathRewriter != nil {
-				path = e.pathRewriter(path)
-			}
-			label := parser.CodexSourceLabelForRoots(labelRoots, file.Path)
-			if knownRoots && label != parser.CodexSourceLabelForRoots(previousRoots, path) ||
-				!knownRoots && (label != "" || parser.CodexProjectIsSourceLabel(file.Path, ".")) {
-				file.ForceParse = true
-			}
+		_ = json.Unmarshal([]byte(labelSignature), &currentRoots)
+		if err := e.staleCodexLabels(ctx, previousRoots, currentRoots, knownRoots); err != nil {
+			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
 	}
 	for _, file := range providerFound {
@@ -6799,8 +6777,7 @@ func (e *Engine) syncAllLocked(
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
 	}
-	_, codexEnabled := e.sources().providerFactories[parser.AgentCodex]
-	labelPassComplete = codexEnabled && !codexDiscoveryFailed && scope == nil && (!e.ephemeral || remoteLabels && e.completeSourceMirror) && (wave == nil || !wave.partial)
+	labelPassComplete = refreshLabels
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats

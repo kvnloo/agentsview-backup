@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,25 @@ func restartContents(t *testing.T, url string) []string {
 	return contents
 }
 
+// claudeScopedUpgradeFrom returns the newest data version whose in-place
+// upgrade to the current version reparses Claude sources. The newest version
+// alone may scope only other providers.
+func claudeScopedUpgradeFrom(t *testing.T) int {
+	t.Helper()
+	current := db.CurrentDataVersion()
+	for from := current - 1; from > 0; from-- {
+		providers := db.ScopedDataVersionProviders(from, current)
+		if providers == nil {
+			break
+		}
+		if slices.Contains(providers, parser.AgentClaude) {
+			return from
+		}
+	}
+	require.FailNow(t, "fixture must exercise a scoped parser upgrade that reparses Claude")
+	return 0
+}
+
 func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	for _, tc := range []struct {
 		name                          string
@@ -107,9 +127,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.scoped {
-				oldVersion := db.CurrentDataVersion() - 1
-				require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()),
-					"fixture must exercise a scoped parser upgrade")
+				oldVersion := claudeScopedUpgradeFrom(t)
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
 				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'`)

@@ -70,8 +70,9 @@ library entrypoints, or an explicit provider kind blocks this inference. Human
 SDK conversations stay Interactive unless their prompts match an automation
 pattern, while known subagents keep that category even when their prompts match
 built-in or user `[automated]` patterns. Runs without a subagent relationship
-count as Automated when they carry a roborev tag or a matching first prompt,
-and prompt matching requires one or fewer real user messages.
+count as Automated when they carry a roborev tag, are Muse Personal background
+runs, or have a matching first prompt, and prompt matching requires one or fewer
+real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and

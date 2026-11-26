@@ -65,10 +65,10 @@ deduplicated before totaling, following the same rule the Usage page applies.
 Subagents include native child sessions and eligible `claude -p`, `codex exec`,
 or Grok headless runs. Muse Personal delegated runs and subagent runs are
 Subagents too. Delegated runs are `runtime.browser_input`, or plain `runtime`
-whose first user message opens with
+whose first user message has
 `Carry out this assignment end to end, then report the result.` or
-`## Task and updates`; they record no parent. A subagent run is plain `runtime`
-whose first user message has the
+`## Task and updates` as its whole first line; they record no parent. A subagent
+run is plain `runtime` whose first user message has the
 `[Subagent Context] You are running as a subagent (depth N/M); ...` banner as
 its whole first line; it links to the session named by its
 `- Requester agent id:` field and stays parentless when that field is missing or

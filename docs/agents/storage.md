@@ -53,8 +53,9 @@ When a provider ranks duplicate sources for one session, a lower-ranked copy
 replaces the archived session only if the stored source still resolves, or the
 provider does not implement `parser.StoredSourcePathRanker`. With that
 interface, a deleted stored source keeps the rank of its path layout, so the
-archive keeps its content and reconciliation marks it source-missing. A rebuild
-reads the stored path from the original archive.
+archive keeps its content and reconciliation marks it source-missing. A remote
+sync ranks a stored location it cannot map to a local copy the same way. A
+rebuild reads the stored path from the original archive.
 
 Full parser and archive-only preservation rebuilds serve the old archive while
 writes receive a retryable HTTP 503. Scoped upgrades serve saved rows while the

@@ -9484,13 +9484,29 @@ func (e *Engine) storedSourceRanksHigher(
 	if !resolves || !ranks || storedPath == "" {
 		return false, nil
 	}
+	// storedPathRanks ranks the stored source by its path layout alone, for
+	// a stored file that is gone or, on a remote sync, a stored location
+	// that cannot be mapped to a local copy.
+	storedPathRanks := func(path string) bool {
+		pathRanker, ok := provider.(parser.StoredSourcePathRanker)
+		if !ok {
+			return false
+		}
+		rank, ok := pathRanker.RankStoredSourcePath(path)
+		if !ok {
+			return false
+		}
+		return reconciliationSourceRankLower(
+			ranker.ReconciliationSourceRank(candidate), rank,
+		)
+	}
 	if e.pathRewriter != nil {
 		if e.storedPathResolver == nil {
-			return false, nil
+			return storedPathRanks(storedPath), nil
 		}
 		resolvedPath, ok := e.storedPathResolver(storedPath)
 		if !ok || resolvedPath == "" {
-			return false, nil
+			return storedPathRanks(storedPath), nil
 		}
 		storedPath = resolvedPath
 	}
@@ -9501,17 +9517,7 @@ func (e *Engine) storedSourceRanksHigher(
 		return false, err
 	}
 	if !found {
-		pathRanker, ok := provider.(parser.StoredSourcePathRanker)
-		if !ok {
-			return false, nil
-		}
-		rank, ok := pathRanker.RankStoredSourcePath(storedPath)
-		if !ok {
-			return false, nil
-		}
-		return reconciliationSourceRankLower(
-			ranker.ReconciliationSourceRank(candidate), rank,
-		), nil
+		return storedPathRanks(storedPath), nil
 	}
 	return reconciliationSourceRankLower(
 		ranker.ReconciliationSourceRank(candidate),

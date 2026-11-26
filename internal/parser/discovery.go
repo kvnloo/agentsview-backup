@@ -925,14 +925,11 @@ func CodexMarkedRunSession(path string) bool {
 }
 
 // CodexObsoleteLabel identifies a saved project that came from an old run label.
-func CodexObsoleteLabel(current, previous []string, previousUnknown bool, path, project, rootPath string) bool {
+func CodexObsoleteLabel(current []string, path, project, rootPath string) bool {
 	if project == "" || CodexSourceLabelForRoots(current, path) == project {
 		return false
 	}
-	if !previousUnknown {
-		return CodexSourceLabelForRoots(previous, path) == project
-	}
-	if filepath.Base(rootPath) == project {
+	if strings.ReplaceAll(filepath.Base(rootPath), "-", "_") == project {
 		return false
 	}
 	for root := filepath.Dir(path); ; root = filepath.Dir(root) {

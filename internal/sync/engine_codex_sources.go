@@ -33,10 +33,6 @@ func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 	}
 	var previous []string
 	unknown := json.Unmarshal([]byte(stored), &previous) != nil
-	if e.archiveStore == nil {
-		e.codexPreviousLabelRoots = previous
-		e.codexUnknownLabelRoots = unknown
-	}
 	if err := staleCodexLabelsInDB(ctx, e.db, previous, roots, unknown, e.machine); err != nil {
 		return "", err
 	}
@@ -59,15 +55,7 @@ func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, curren
 			if !parser.CodexMarkedRunSession(record.FilePath) {
 				continue
 			}
-			inScope := false
-			for _, root := range current {
-				rel, err := filepath.Rel(root, record.FilePath)
-				if err == nil && filepath.IsLocal(rel) {
-					inScope = true
-					break
-				}
-			}
-			if !inScope {
+			if !changedPathWithinAnyRoot(record.FilePath, current) {
 				continue
 			}
 		}

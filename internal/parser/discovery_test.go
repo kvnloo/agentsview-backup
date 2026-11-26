@@ -20,20 +20,25 @@ func TestCodexObsoleteLabel(t *testing.T) {
 	assert.False(t, CodexMarkedRunSession(ordinary))
 	for _, tc := range []struct {
 		name              string
-		current, previous []string
-		unknown           bool
+		current           []string
 		project, rootPath string
 		want              bool
 	}{
-		{"known narrowing", []string{sessions}, []string{root}, false, "team", filepath.Join(root, "checkout"), true},
-		{"unchanged label", []string{root}, []string{root}, false, "team", filepath.Join(root, "checkout"), false},
-		{"unknown narrowing", []string{sessions}, nil, true, "team", filepath.Join(root, "checkout"), true},
-		{"saved root confirms project", []string{sessions}, nil, true, "team", filepath.Join(root, "team"), false},
-		{"different project", []string{sessions}, []string{root}, false, "checkout", filepath.Join(root, "checkout"), false},
+		{"narrowing", []string{sessions}, "team", filepath.Join(root, "checkout"), true},
+		{"unchanged label", []string{root}, "team", filepath.Join(root, "checkout"), false},
+		{"saved root confirms project", []string{sessions}, "team", filepath.Join(root, "team"), false},
+		{"different project", []string{sessions}, "checkout", filepath.Join(root, "checkout"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.previous, tc.unknown, source, tc.project, tc.rootPath))
+			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, source, tc.project, tc.rootPath))
 		})
+	}
+	for _, tc := range []struct{ label, checkout string }{
+		{"my_app", "my-app"},
+		{"my-app", "my_app"},
+	} {
+		path := filepath.Join(root, tc.label, ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source))
+		assert.Equal(t, tc.label == "my-app", CodexObsoleteLabel(nil, path, tc.label, filepath.Join(root, tc.checkout)))
 	}
 }
 

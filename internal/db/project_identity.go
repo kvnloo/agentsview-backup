@@ -976,7 +976,7 @@ func writeSessionProjectIdentitySnapshotExec(
 // mappings, so a missing checkout cannot replace resolved historical identity
 // with a basename fallback. It keeps freshly parsed Codex source labels intact.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
-	ctx context.Context, codexRoots, previousCodexRoots []string, previousUnknown bool,
+	ctx context.Context, codexRoots []string,
 ) (int, error) {
 	if err := db.requireWritable(); err != nil {
 		return 0, err
@@ -1058,7 +1058,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			continue
 		}
 		if restore.agent == string(parser.AgentCodex) && parser.CodexObsoleteLabel(
-			codexRoots, previousCodexRoots, previousUnknown, restore.sourcePath, restore.currentProject, restore.rootPath,
+			codexRoots, restore.sourcePath, restore.currentProject, restore.rootPath,
 		) {
 			obsolete = append(obsolete, restore)
 			continue

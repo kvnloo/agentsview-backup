@@ -350,9 +350,7 @@ type Engine struct {
 	// sessions for the preserve guards in prepareSessionWrite.
 	// During a resync/rebuild it points at the original DB while
 	// e.db points at the fresh one; nil means e.db is the archive.
-	archiveStore            db.Store
-	codexPreviousLabelRoots []string
-	codexUnknownLabelRoots  bool
+	archiveStore db.Store
 	// archiveRebuildIndex snapshots source ownership in the original archive
 	// for one rebuild; nil outside a rebuild, where e.db is queried instead.
 	archiveRebuildIndex *archiveRebuildIndex
@@ -4311,17 +4309,8 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 	onProgress ProgressFunc,
 ) (SyncStats, int, passEpilogueEligibility, error) {
-	defer func() { e.codexPreviousLabelRoots = nil; e.codexUnknownLabelRoots = false }()
 	if e.sourceSyncErr != nil {
 		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, e.sourceSyncErr
-	}
-	var labelRoots string
-	if agent == "" || agent == parser.AgentCodex {
-		var err error
-		if labelRoots, err = e.refreshCodexLabelRoots(ctx); err != nil {
-			e.setLastReconciliationResult(ReconciliationResult{Aborted: true})
-			return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, err
-		}
 	}
 	e.reportProgress(onProgress, Progress{
 		Phase:  PhaseDiscovering,
@@ -4359,10 +4348,6 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.ProcessingComplete()
-	if complete && labelRoots != "" {
-		err = e.db.SetSyncState(ctx, codexLabelRootsKey, labelRoots)
-		complete = err == nil
-	}
 	if err == nil && !complete {
 		err = errors.New("watch root reconciliation aborted")
 	}
@@ -6348,9 +6333,6 @@ func (e *Engine) syncAllLocked(
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
 	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
-	previousLabelRoots := e.codexPreviousLabelRoots
-	previousUnknown := e.codexUnknownLabelRoots
-	defer func() { e.codexPreviousLabelRoots = previousLabelRoots; e.codexUnknownLabelRoots = previousUnknown }()
 	if e.sourceSyncErr != nil && e.archiveStore == nil {
 		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}, abortCause: e.sourceSyncErr.Error()}
 	}
@@ -11118,8 +11100,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 				continue
 			}
 			if sess.Agent == parser.AgentCodex && parser.CodexObsoleteLabel(
-				e.sources().agentDirs[parser.AgentCodex], e.codexPreviousLabelRoots,
-				e.codexUnknownLabelRoots, sess.File.Path, snapshot.Project, snapshot.RootPath,
+				e.sources().agentDirs[parser.AgentCodex], sess.File.Path, snapshot.Project, snapshot.RootPath,
 			) {
 				continue
 			}

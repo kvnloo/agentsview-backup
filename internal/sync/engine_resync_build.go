@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -65,15 +64,6 @@ func (e *Engine) resyncBuildLocked(
 	e.clearVerifiedSources()
 
 	origDB := e.db
-	storedCodexRoots, err := origDB.GetSyncState(ctx, codexLabelRootsKey)
-	if err != nil {
-		return SyncStats{Aborted: true}, err
-	}
-	var previousCodexRoots []string
-	previousUnknown := json.Unmarshal([]byte(storedCodexRoots), &previousCodexRoots) != nil
-	e.codexPreviousLabelRoots = previousCodexRoots
-	e.codexUnknownLabelRoots = previousUnknown
-	defer func() { e.codexPreviousLabelRoots = nil; e.codexUnknownLabelRoots = false }()
 	origPath := origDB.Path()
 	tempPath := origPath + resyncTempSuffix
 	reportResyncPhase(
@@ -420,6 +410,7 @@ func (e *Engine) resyncBuildLocked(
 		}
 		return stats, nil
 	}
+
 	for contributorIndex, contributor := range opts.Contributors {
 		if contributor.Started != nil {
 			contributor.Started()
@@ -888,7 +879,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
-		ctx, e.sources().agentDirs[parser.AgentCodex], previousCodexRoots, previousUnknown,
+		ctx, e.sources().agentDirs[parser.AgentCodex],
 	); err != nil {
 		log.Printf("resync: restore session project identity: %v", err)
 		stats.Aborted = true

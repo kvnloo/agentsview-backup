@@ -39,10 +39,15 @@ func newCodeBuddyCBCSourceSet(roots []string, assetsDir string) codebuddyCBCSour
 // transcript under root.
 func codebuddyCBCSourcePath(root, path string) bool {
 	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
-	if !ok || !strings.HasSuffix(rel, ".jsonl") {
+	return ok && codebuddyCBCTranscriptRel(strings.Split(filepath.ToSlash(rel), "/"))
+}
+
+// codebuddyCBCTranscriptRel reports whether parts, the components of a path
+// relative to a projects root, name a main or subagent CBC transcript.
+func codebuddyCBCTranscriptRel(parts []string) bool {
+	if len(parts) == 0 || !strings.HasSuffix(parts[len(parts)-1], ".jsonl") {
 		return false
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch len(parts) {
 	case 2:
 		stem := strings.TrimSuffix(parts[1], ".jsonl")

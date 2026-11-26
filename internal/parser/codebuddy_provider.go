@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 )
@@ -284,11 +285,28 @@ func (p *codebuddyProvider) ReconciliationSourceRank(source SourceRef) Reconcili
 // 4.x path carries no rank, so a 4.x session whose manifest is gone stays
 // replaceable as before.
 func (p *codebuddyProvider) RankStoredSourcePath(path string) (ReconciliationSourceRank, bool) {
-	root, ok := codebuddyCBCRootFromPath(path)
-	if !ok || filepath.Base(root) != "projects" {
+	if !codebuddyStoredCBCTranscript(path) {
 		return ReconciliationSourceRank{}, false
 	}
 	return ReconciliationSourceRank{Class: 2}, true
+}
+
+// codebuddyStoredCBCTranscript reports whether an archived path names a main
+// or subagent CBC transcript under a projects directory. A remote sync can
+// archive paths from another operating system, such as a Windows path behind
+// a host: prefix on a macOS receiver, so the path is read as text: split on
+// slashes alone, then on either slash, without the receiver's path rules.
+func codebuddyStoredCBCTranscript(path string) bool {
+	for _, form := range []string{path, strings.ReplaceAll(path, `\`, "/")} {
+		parts := strings.Split(pathpkg.Clean(form), "/")
+		for _, depth := range []int{4, 2} {
+			if len(parts) > depth && parts[len(parts)-depth-1] == "projects" &&
+				codebuddyCBCTranscriptRel(parts[len(parts)-depth:]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (p *codebuddyProvider) SourceForReconciliation(

@@ -772,6 +772,37 @@ func TestCodeBuddyCBCSourcePathRejectsUnusableStems(t *testing.T) {
 	}
 }
 
+// A remote sync archives paths in the sender's form, which can differ from the
+// receiver's. An archived CLI/5.x transcript ranks above 4.x history in any of
+// those forms, so an older copy cannot replace its later turns.
+func TestCodeBuddyRankStoredSourcePathAcrossPathStyles(t *testing.T) {
+	p, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).
+		NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"/home/u/.codebuddy/projects/-work-demo/conv1.jsonl", true},
+		{"/home/u/.codebuddy/projects/-work-demo/conv1/subagents/agent-a.jsonl", true},
+		{"host:/home/u/.codebuddy/projects/-work-demo/conv1.jsonl", true},
+		{`C:\Users\u\.codebuddy\projects\-work-demo\conv1.jsonl`, true},
+		{`C:\Users\u\.codebuddy\projects\-work-demo\conv1\subagents\agent-a.jsonl`, true},
+		{`host:C:\Users\u\.codebuddy\projects\-work-demo\conv1.jsonl`, true},
+		{"host:C:/Users/u/.codebuddy/projects/-work-demo/conv1.jsonl", true},
+		{`\\server\share\.codebuddy\projects\-work-demo\conv1.jsonl`, true},
+		{"/home/u/history/ws/conv1/index.json", false},
+		{`host:C:\Users\u\history\ws\conv1\index.json`, false},
+		{`C:\Users\u\.codebuddy\projects\-work-demo\conv1.json`, false},
+		{`C:\Users\u\.codebuddy\projects\-work-demo\agent-a.jsonl`, false},
+		{`C:\Users\u\.codebuddy\projects\-work-demo\conv1\notes\agent-a.jsonl`, false},
+		{`C:\Users\u\.codebuddy\other\-work-demo\conv1.jsonl`, false},
+	} {
+		_, ranked := p.RankStoredSourcePath(tc.path)
+		assert.Equal(t, tc.want, ranked, tc.path)
+	}
+}
+
 func TestCodeBuddyRootsSplitByLayout(t *testing.T) {
 	both := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(both, "history"), 0o755))

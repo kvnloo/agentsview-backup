@@ -203,7 +203,19 @@ func TestStoredSourceRankKeepsUnmappedRemoteCodeBuddyTranscript(t *testing.T) {
 			resolver: func(string) (string, bool) { return "", false }, wantRanked: true,
 		},
 		{
+			name: "unmapped Windows transcript", storedPath: `host:C:\Users\user\.codebuddy\projects\-work-demo\conv1.jsonl`,
+			resolver: func(string) (string, bool) { return "", false }, wantRanked: true,
+		},
+		{
+			name: "Windows transcript with no resolver", storedPath: `host:C:\Users\user\.codebuddy\projects\-work-demo\conv1.jsonl`,
+			wantRanked: true,
+		},
+		{
 			name: "unmapped 4.x copy", storedPath: "host:/home/user/history/ws/conv1/index.json",
+			resolver: func(string) (string, bool) { return "", false },
+		},
+		{
+			name: "unmapped Windows 4.x copy", storedPath: `host:C:\Users\user\history\ws\conv1\index.json`,
 			resolver: func(string) (string, bool) { return "", false },
 		},
 	} {

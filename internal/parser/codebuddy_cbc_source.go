@@ -374,6 +374,7 @@ func (s codebuddyCBCSourceSet) FindSource(
 	if !IsValidSessionID(sessionID) || subagent && !IsValidSessionID(agentID) {
 		return SourceRef{}, false, nil
 	}
+	var copies []SourceRef
 	for _, root := range s.roots {
 		projects, err := os.ReadDir(root)
 		if err != nil {
@@ -388,11 +389,36 @@ func (s codebuddyCBCSourceSet) FindSource(
 				candidate = filepath.Join(root, project.Name(), sessionID, "subagents", agentID+".jsonl")
 			}
 			if IsRegularFile(candidate) {
-				return s.sourceRef(root, candidate), true, nil
+				copies = append(copies, s.sourceRef(root, candidate))
 			}
 		}
 	}
-	return SourceRef{}, false, nil
+	if len(copies) == 0 {
+		return SourceRef{}, false, nil
+	}
+	return codebuddyPreferredCBCCopy(ctx, copies), true, nil
+}
+
+// codebuddyPreferredCBCCopy picks the copy a lookup by session id returns
+// when configured roots or project directories hold several transcripts of
+// one conversation: the highest-ranked copy that holds a turn, otherwise the
+// highest-ranked copy. An empty or metadata-only copy thus cannot hide a
+// usable one, and the 4.x history stays only while no copy holds a turn.
+func codebuddyPreferredCBCCopy(ctx context.Context, copies []SourceRef) SourceRef {
+	if len(copies) == 1 {
+		return copies[0]
+	}
+	best, bestHolds := 0, false
+	var bestRank ReconciliationSourceRank
+	for i, source := range copies {
+		path := source.DisplayPath
+		holds := codebuddyCBCHasConversation(ctx, path)
+		rank := codebuddyRank(2, path)
+		if i == 0 || holds && !bestHolds || holds == bestHolds && bestRank.Lower(rank) {
+			best, bestHolds, bestRank = i, holds, rank
+		}
+	}
+	return copies[best]
 }
 
 func (s codebuddyCBCSourceSet) pathFromSource(source SourceRef) (string, string, bool) {

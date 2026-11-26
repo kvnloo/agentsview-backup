@@ -270,7 +270,9 @@ func (p *codebuddyProvider) FindSource(
 
 // cbcYieldsToLegacy reports whether a found CBC transcript holds no turn of
 // the conversation while a 4.x copy of the same session exists, so lookups
-// keep reaching the 4.x copy until the transcript gains a turn.
+// keep reaching the 4.x copy until a transcript gains a turn. A lookup by id
+// already prefers a copy that holds a turn, so this yields only when no copy
+// does.
 func (p *codebuddyProvider) cbcYieldsToLegacy(
 	ctx context.Context, source SourceRef, req FindSourceRequest,
 ) bool {
@@ -326,7 +328,8 @@ func (p *codebuddyProvider) Parse(
 // legacySuperseded reports whether a CBC transcript now owns the session a
 // 4.x manifest source names. A transcript owns it once it holds a turn of
 // the conversation; an empty, meta-only, or unreadable transcript leaves the
-// 4.x copy in place.
+// 4.x copy in place. The lookup checks every copy of the transcript, as
+// FindSource does.
 func (p *codebuddyProvider) legacySuperseded(ctx context.Context, source SourceRef) bool {
 	if len(p.cbc.roots) == 0 {
 		return false

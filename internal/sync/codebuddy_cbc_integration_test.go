@@ -2,6 +2,7 @@ package sync
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -480,4 +481,56 @@ func TestSyncCodeBuddyOlderCopyKeepsNewerTurns(t *testing.T) {
 		turn("u3", "u2", "third", 1767225800000))
 	engine.SyncAll(t.Context(), nil)
 	assertTurns("codebuddy:conv1", newer, 3, "the newer copy still updates the session")
+}
+
+// Two configured homes can hold the same conversation, such as a backup
+// beside the live home. On a first import into an empty archive, the copy
+// with the later turns owns the session whichever home lists first, and the
+// older copy cannot overwrite it by being written last.
+func TestSyncCodeBuddyFirstImportKeepsNewerCopy(t *testing.T) {
+	turn := func(id, parent, text string, ts int) string {
+		parentField := ""
+		if parent != "" {
+			parentField = `"parentId":"` + parent + `",`
+		}
+		return `{"id":"` + id + `",` + parentField + `"type":"message","role":"user","timestamp":` +
+			strconv.Itoa(ts) + `,"content":[{"type":"input_text","text":"` + text + `"}]}`
+	}
+	for _, newerFirst := range []bool{true, false} {
+		for _, run := range []struct {
+			name string
+			sync func(*Engine)
+		}{
+			{"full sync", func(e *Engine) { e.SyncAll(t.Context(), nil) }},
+			{"first import", func(e *Engine) {
+				_, _, err := e.RunFirstImport(t.Context(), nil)
+				require.NoError(t, err)
+			}},
+		} {
+			t.Run(fmt.Sprintf("%s newer listed first %v", run.name, newerFirst), func(t *testing.T) {
+				firstHome, firstProject := cbcSyncHome(t)
+				secondHome, secondProject := cbcSyncHome(t)
+				newerProject, olderProject := firstProject, secondProject
+				if !newerFirst {
+					newerProject, olderProject = secondProject, firstProject
+				}
+				newer := filepath.Join(newerProject, "conv1.jsonl")
+				older := filepath.Join(olderProject, "conv1.jsonl")
+				writeCBCSync(t, newer, turn("u1", "", "first", 1767225600000),
+					turn("u2", "u1", "second", 1767225700000), turn("u3", "u2", "third", 1767225800000))
+				writeCBCSync(t, older, turn("u1", "", "first", 1767225600000))
+				stale := time.Now().Add(-time.Hour)
+				require.NoError(t, os.Chtimes(older, stale, stale))
+
+				database := openTestDB(t)
+				run.sync(newCBCEngine(t, database, firstHome, secondHome))
+				sess, err := database.GetSessionFull(t.Context(), "codebuddy:conv1")
+				require.NoError(t, err)
+				require.NotNil(t, sess)
+				require.NotNil(t, sess.FilePath)
+				assert.Equal(t, newer, *sess.FilePath)
+				assert.Equal(t, 3, sess.UserMessageCount)
+			})
+		}
+	}
 }

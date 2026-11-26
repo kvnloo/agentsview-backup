@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -800,6 +802,52 @@ func TestCodeBuddyRankStoredSourcePathAcrossPathStyles(t *testing.T) {
 	} {
 		_, ranked := p.RankStoredSourcePath(tc.path)
 		assert.Equal(t, tc.want, ranked, tc.path)
+	}
+}
+
+// Discovery returns one copy of a conversation that several homes hold: the
+// newest copy that holds a turn. Copies with no turn yet stay, so the 4.x
+// history keeps showing until a transcript gains one.
+func TestCodeBuddyDiscoverKeepsBestCopyOfConversation(t *testing.T) {
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	meta := `{"type":"session-meta","id":"m","sessionId":"conv1"}`
+	for _, tc := range []struct {
+		name         string
+		newer, older string
+		wantNewer    bool
+		wantOlder    bool
+	}{
+		{name: "newer copy holds turns", newer: line, older: line, wantNewer: true},
+		{name: "newer copy is empty", newer: meta, older: line, wantOlder: true},
+		{name: "no copy holds a turn", newer: meta, older: meta, wantNewer: true, wantOlder: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newerHome, newerProject := cbcHome(t)
+			olderHome, olderProject := cbcHome(t)
+			newer := filepath.Join(newerProject, "conv1.jsonl")
+			older := filepath.Join(olderProject, "conv1.jsonl")
+			agent := filepath.Join(olderProject, "conv1", "subagents", "agent-a.jsonl")
+			writeCBC(t, newer, tc.newer)
+			writeCBC(t, older, tc.older)
+			writeCBC(t, agent, line)
+			stale := time.Now().Add(-time.Hour)
+			require.NoError(t, os.Chtimes(older, stale, stale))
+			manifest := filepath.Join(olderHome, "history", "ws", "conv1", "index.json")
+			writeCBC(t, manifest, `{"messages":[]}`)
+
+			p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+				NewProvider(ProviderConfig{Roots: []string{olderHome, newerHome}, Machine: "m"})
+			sources, err := p.Discover(t.Context())
+			require.NoError(t, err)
+			var paths []string
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.Equal(t, tc.wantNewer, slices.Contains(paths, newer), "newer copy")
+			assert.Equal(t, tc.wantOlder, slices.Contains(paths, older), "older copy")
+			assert.Contains(t, paths, agent, "an agent transcript with one copy stays")
+			assert.Contains(t, paths, manifest, "4.x manifests stay")
+		})
 	}
 }
 

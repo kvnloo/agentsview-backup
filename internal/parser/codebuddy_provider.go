@@ -109,6 +109,8 @@ type codebuddyProvider struct {
 // Discover returns every source it could read. When a directory is
 // unreadable it still returns the readable sources, together with the
 // DiscoveryIncompleteError, so the engine syncs them without tombstoning.
+// When several CLI/5.x transcripts hold one conversation, only the copy
+// bestCBCCopies picks is returned.
 func (p *codebuddyProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
@@ -116,8 +118,68 @@ func (p *codebuddyProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 		addJSONLSource(source, &sources, seen)
 		return nil
 	})
+	sources = p.bestCBCCopies(ctx, sources)
 	sortJSONLSources(sources)
 	return sources, err
+}
+
+// bestCBCCopies keeps one transcript per conversation when configured roots
+// or project directories hold several copies of it, such as a backup beside
+// the live home: the highest-ranked copy that holds a turn. A sync parses the
+// copies side by side, and the archive check that keeps newer turns sees only
+// what is already written, so on a first import an older copy written last
+// would replace the newer turns. When no copy holds a turn, every copy stays,
+// which keeps the 4.x history in place as before. 4.x manifests always stay.
+func (p *codebuddyProvider) bestCBCCopies(ctx context.Context, sources []SourceRef) []SourceRef {
+	copies := make(map[string]int)
+	for _, source := range sources {
+		if source.ReconciliationIdentity != "" && p.isCBC(source) {
+			copies[source.ReconciliationIdentity]++
+		}
+	}
+	type pick struct {
+		index int
+		rank  ReconciliationSourceRank
+	}
+	best := make(map[string]pick)
+	for i, source := range sources {
+		id := source.ReconciliationIdentity
+		if copies[id] < 2 || !p.isCBC(source) {
+			continue
+		}
+		_, path, ok := p.cbc.pathFromSource(source)
+		if !ok || !codebuddyCBCHasConversation(ctx, path) {
+			continue
+		}
+		rank := p.ReconciliationSourceRank(source)
+		rank.Path = path
+		if current, ok := best[id]; !ok || codebuddyRankLower(current.rank, rank) {
+			best[id] = pick{index: i, rank: rank}
+		}
+	}
+	if len(best) == 0 {
+		return sources
+	}
+	kept := sources[:0]
+	for i, source := range sources {
+		if winner, ok := best[source.ReconciliationIdentity]; ok && i != winner.index && p.isCBC(source) {
+			continue
+		}
+		kept = append(kept, source)
+	}
+	return kept
+}
+
+// codebuddyRankLower orders copies as the engine's archive check does: class,
+// then recency, then the smaller path.
+func codebuddyRankLower(a, b ReconciliationSourceRank) bool {
+	if a.Class != b.Class {
+		return a.Class < b.Class
+	}
+	if a.Recency != b.Recency {
+		return a.Recency < b.Recency
+	}
+	return a.Path > b.Path
 }
 
 // DiscoverEach yields the CLI and IDE 5.x transcripts, then the IDE 4.x

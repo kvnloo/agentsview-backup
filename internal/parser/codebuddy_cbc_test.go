@@ -272,6 +272,40 @@ func TestCodeBuddyCBCPersistedToolOutput(t *testing.T) {
 	assert.False(t, got[2].PersistedOutputUnresolved, "quoted placeholder text is ordinary output")
 }
 
+func TestCodeBuddyCBCPersistedOutputKeepsInvalidUTF8(t *testing.T) {
+	home, project := cbcHome(t)
+	side := filepath.Join(project, "s1", "tool-results", "c1.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(side), 0o755))
+	require.NoError(t, os.WriteFile(side, []byte("head\xffbody"), 0o600))
+	writeCBC(t, filepath.Join(project, "s1.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"go"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1001,"name":"Bash","callId":"c1","arguments":"{}"}`,
+		`{"id":"r1","parentId":"c1","type":"function_call_result","timestamp":1002,"name":"Bash","callId":"c1","output":"<persisted-output>\nFull output saved to: `+filepath.ToSlash(side)+`\n</persisted-output>"}`,
+	)
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 1)
+	var got []ParsedToolResult
+	for _, m := range results[0].Messages {
+		got = append(got, m.ToolResults...)
+	}
+	require.Len(t, got, 1)
+	assert.Equal(t, "head\uFFFDbody", DecodeContent(got[0].ContentRaw),
+		"a side file with invalid UTF-8 keeps its readable text")
+}
+
+func TestCodeBuddyReferencedBlobsAcceptsSpacedJSON(t *testing.T) {
+	home, project := cbcHome(t)
+	blob := strings.Repeat("ab", 32)
+	stored := filepath.Join(home, "blobs", "ab", blob+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stored), 0o755))
+	require.NoError(t, os.WriteFile(stored, []byte("png"), 0o600))
+	writeCBC(t, filepath.Join(project, "s1.jsonl"),
+		`{"id": "u1", "type": "message", "role": "user", "content": [{"type": "image_blob_ref", "blob_id": "`+blob+`"}]}`)
+	blobs, err := CodeBuddyReferencedBlobs(t.Context(), filepath.Join(home, "projects"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{stored}, blobs)
+}
+
 func TestCodeBuddyCBCAskUserAnswerIsDialogue(t *testing.T) {
 	home, project := cbcHome(t)
 	writeCBC(t, filepath.Join(project, "s7.jsonl"),

@@ -398,11 +398,6 @@ func codebuddyCBCModel(pd gjson.Result) string {
 	)
 }
 
-func jsonMarshalString(s string) (string, error) {
-	data, err := json.Marshal(s)
-	return string(data), err
-}
-
 // codebuddyCBCToolOutput extracts a function_call_result's displayed text.
 func codebuddyCBCToolOutput(it codebuddyCBCItem) string {
 	output := it.raw.Get("output")

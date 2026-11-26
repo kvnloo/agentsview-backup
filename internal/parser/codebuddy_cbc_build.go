@@ -2,6 +2,8 @@ package parser
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strings"
 	"time"
 
@@ -265,13 +267,15 @@ func (b *codebuddyCBCBuilder) addResult(it codebuddyCBCItem) error {
 	if it.raw.Get("status").Str == "incomplete" || pd.Get("toolResult.error").Exists() {
 		status = "errored"
 	}
-	quoted, _ := jsonMarshalString(output)
+	// Persisted outputs are raw file bytes; keep them even when they are not
+	// valid UTF-8 instead of storing an empty result.
+	quoted, _ := json.Marshal(output, jsontext.AllowInvalidUTF8(true))
 	result := ParsedToolResult{
 		ToolUseID:                 callID,
 		Source:                    "tool_result",
 		Status:                    status,
 		ContentLength:             len(output),
-		ContentRaw:                quoted,
+		ContentRaw:                string(quoted),
 		PersistedOutputUnresolved: unresolved,
 	}
 	if it.raw.Get("name").Str == "AskUserQuestion" {

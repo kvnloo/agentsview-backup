@@ -221,7 +221,7 @@ func codebuddyTranscriptBlobIDs(ctx context.Context, path string) ([]string, err
 	return ids, nil
 }
 
-var codebuddyBlobIDRe = regexp.MustCompile(`"blob_id"s*:s*"([0-9a-f]{64})"`)
+var codebuddyBlobIDRe = regexp.MustCompile(`"blob_id"\s*:\s*"([0-9a-f]{64})"`)
 
 func codebuddyDecodeDataURL(url string) ([]byte, string, bool) {
 	header, payload, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ",")

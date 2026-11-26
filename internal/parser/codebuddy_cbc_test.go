@@ -428,7 +428,7 @@ func writeCBCCatalog(t *testing.T, home string, statements ...string) {
 
 func TestCodeBuddyCBCCatalogMetadata(t *testing.T) {
 	home, project := cbcHome(t)
-	for _, id := range []string{"run-a", "run-b"} {
+	for _, id := range []string{"run-a", "run-b", "run-c"} {
 		writeCBC(t, filepath.Join(project, id+".jsonl"),
 			`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"`+id+`","content":[{"type":"input_text","text":"hi `+id+`"}]}`,
 			`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}]}`,
@@ -463,6 +463,9 @@ func TestCodeBuddyCBCCatalogMetadata(t *testing.T) {
 	discussion := cbcSession(t, results, "codebuddy:run-a:discussion:d1")
 	assert.Equal(t, "discussion_anchor", discussion.Messages[0].SourceSubtype)
 	assert.Equal(t, "> hello", discussion.Messages[0].Content)
+	c := cbcSession(t, results, "codebuddy:run-c")
+	assert.Equal(t, "Transcript title", c.Session.SessionName,
+		"another machine's catalog row does not rename a local conversation")
 	for _, r := range results {
 		assert.NotEqual(t, "Remote", r.Session.SessionName, "remote workspace rows are not local sessions")
 	}

@@ -1948,7 +1948,10 @@ func TestResumeCodeBuddyUsesRuntimeSession(t *testing.T) {
 		Cwd     string `json:"cwd"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(t, strings.HasSuffix(resp.Command, " && codebuddy --resume run-77"), resp.Command)
+	// The command enters the session directory in this server's shell first.
+	enterDir, ok := strings.CutSuffix(resp.Command, "codebuddy --resume run-77")
+	require.True(t, ok, resp.Command)
+	assert.NotEmpty(t, enterDir, "the command enters the session directory")
 	assert.NotContains(t, resp.Command, "conv-1", "the archive id is not a CLI session")
 	assertSamePath(t, "cwd", resp.Cwd, cwd)
 

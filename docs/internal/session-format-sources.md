@@ -5733,7 +5733,7 @@ schemas keep their existing ordering behavior.
     On a host the IDE reaches over SSH, the IDE's remote server writes the
     same file without `conversations` or `conversation_runtime_sources`;
     its `btw_entries` and `discussion_threads` rows are keyed by the
-    runtime session id that names the transcript.
+    runtime session id the transcript records.
     User images are `image_blob_ref` blocks naming
     `<home>/blobs/<first two hex>/<sha256>.<ext>`; converted 4.x images are
     `codebuddy-asset://assets/<name>` in the 4.x conversation directory.
@@ -5779,7 +5779,9 @@ schemas keep their existing ordering behavior.
     turn is not a branch. Standalone `model-usage` items follow their parent
     onto a path.
   - Archive ids use the transcript stem; the CLI resumes the transcript's
-    `sessionId` (stored as `source_session_id`). The IDE opens
+    `sessionId` (stored as `source_session_id`). Catalog rows are keyed by
+    that recorded `sessionId`, which AgentsView reads from the start of the
+    transcript and falls back to the stem without one. The IDE opens
     `<scheme>://codebuddy-ide/conversation/open?id=<conversation id>`, with the
     id matching `^[A-Za-z0-9_-]{1,128}$` (IDE `codebuddyConversationDeepLink`).
     On Linux, AgentsView opens it with `xdg-open`, so

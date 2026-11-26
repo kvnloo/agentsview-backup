@@ -255,13 +255,71 @@ func (s codebuddyCBCSourceSet) sourcesForCatalogChange(
 		return one.Discover(ctx)
 	}
 	var out []SourceRef
+	// A row is keyed by the session id a transcript records. The filename
+	// stem usually matches it; ids no stem matches are looked up by the
+	// recorded id.
+	unmatched := make(map[string]bool)
 	for _, runtimeID := range changed {
 		source, ok, err := one.FindSource(ctx, FindSourceRequest{RawSessionID: runtimeID})
 		if err != nil {
 			return nil, err
 		}
-		if ok {
+		if !ok {
+			unmatched[runtimeID] = true
+			continue
+		}
+		out = append(out, source)
+		if readCodeBuddyCBCHeader(ctx, source.DisplayPath).catalogKey(source.DisplayPath) != runtimeID {
+			unmatched[runtimeID] = true
+		}
+	}
+	if len(unmatched) == 0 {
+		return out, nil
+	}
+	recorded, err := one.sourcesRecordingSessionIDs(ctx, unmatched)
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range recorded {
+		if !slices.ContainsFunc(out, func(s SourceRef) bool { return s.Key == source.Key }) {
 			out = append(out, source)
+		}
+	}
+	return out, nil
+}
+
+// sourcesRecordingSessionIDs returns the main transcripts whose catalog key,
+// the session id they record, is one of ids. It reads only the start of each
+// transcript.
+func (s codebuddyCBCSourceSet) sourcesRecordingSessionIDs(
+	ctx context.Context, ids map[string]bool,
+) ([]SourceRef, error) {
+	var out []SourceRef
+	for _, root := range s.roots {
+		projects, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, project := range projects {
+			if !isDirOrSymlink(project, root) {
+				continue
+			}
+			entries, err := os.ReadDir(filepath.Join(root, project.Name()))
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				path := filepath.Join(root, project.Name(), entry.Name())
+				if !entry.Type().IsRegular() || !codebuddyCBCSourcePath(root, path) {
+					continue
+				}
+				if ids[readCodeBuddyCBCHeader(ctx, path).catalogKey(path)] {
+					out = append(out, s.sourceRef(root, path))
+				}
+			}
 		}
 	}
 	return out, nil
@@ -397,7 +455,7 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 		catalog, err := loadCodeBuddyCatalog(ctx, codebuddyCatalogPathForProjects(root))
 		if err == nil {
 			_, _ = fmt.Fprintf(h, "catalog\x00%s\x00",
-				catalog.fingerprint(codebuddyCBCIdentityForPath(path).runtimeID))
+				catalog.fingerprint(readCodeBuddyCBCHeader(ctx, path).catalogKey(path)))
 		}
 	}
 	inode, device := sourceFileIdentity(info)
@@ -469,7 +527,7 @@ func (s codebuddyCBCSourceSet) Parse(
 			return ParseOutcome{}, err
 		}
 		if catalog != nil {
-			in.catalog = catalog.byRuntime[codebuddyCBCIdentityForPath(path).runtimeID]
+			in.catalog = catalog.byRuntime[readCodeBuddyCBCHeader(ctx, path).catalogKey(path)]
 		}
 		in.opts.assets = codebuddyBlobAssets{
 			home: filepath.Dir(filepath.Clean(root)), assetsDir: s.assetsDir,

@@ -389,11 +389,12 @@ func (p *codebuddyProvider) SourceForReconciliation(
 
 // ComputeMultiFileStatHash digests the transcript, each tool-results
 // directory it reads (an agent also reads its parent's) and every saved
-// output in them, and the session's own catalog row so a warm process can skip
-// unchanged CBC sources without hashing them, while a catalog write for
-// another conversation leaves this digest alone. The engine calls it on a
-// rootless probe provider, so the root comes from the path's own layout.
-// 4.x manifests keep content verification.
+// output in them, and the session's own catalog row, keyed by the session id
+// the transcript records, so a warm process can skip unchanged CBC sources
+// without hashing them, while a catalog write for another conversation leaves
+// this digest alone. The engine calls it on a rootless probe provider, so the
+// root comes from the path's own layout. 4.x manifests keep content
+// verification.
 func (p *codebuddyProvider) ComputeMultiFileStatHash(path string) uint64 {
 	root, ok := codebuddyCBCRootFromPath(path)
 	if !ok {
@@ -412,7 +413,7 @@ func (p *codebuddyProvider) ComputeMultiFileStatHash(path string) uint64 {
 	}
 	row, err := codebuddyCatalogRowFingerprint(
 		context.Background(), codebuddyCatalogPathForProjects(root),
-		codebuddyCBCIdentityForPath(path).runtimeID,
+		readCodeBuddyCBCHeader(context.Background(), path).catalogKey(path),
 	)
 	if err != nil {
 		return 0

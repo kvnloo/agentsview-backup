@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,6 +92,67 @@ func codebuddyCBCHasConversation(ctx context.Context, path string) bool {
 			return true
 		}
 	}
+}
+
+// codebuddyCBCHeader is what the start of a main transcript records about
+// its conversation, read without parsing the rest of the file.
+type codebuddyCBCHeader struct {
+	// sessionID is the first recorded sessionId: the runtime session id
+	// that keys the conversation's catalog row. It can differ from the
+	// filename stem, which names the archived session.
+	sessionID string
+}
+
+// The header read stops at the first line carrying a sessionId, which
+// producers write on the first line, or at the first conversation item. These
+// bounds keep a transcript without either from being read in full.
+const (
+	codebuddyCBCHeaderLines = 64
+	codebuddyCBCHeaderBytes = 1 << 20
+)
+
+// readCodeBuddyCBCHeader reads the header of the main transcript at path. A
+// subagent transcript, whose catalog key and archive identity both come from
+// its path, or an unreadable file returns an empty header.
+func readCodeBuddyCBCHeader(ctx context.Context, path string) codebuddyCBCHeader {
+	var h codebuddyCBCHeader
+	if codebuddyCBCIdentityForPath(path).subagent {
+		return h
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return h
+	}
+	defer f.Close()
+	lr := newLineReaderContext(ctx, io.LimitReader(f, codebuddyCBCHeaderBytes), codebuddyCBCHeaderBytes)
+	defer releaseLineReader(lr)
+	for range codebuddyCBCHeaderLines {
+		line, ok := lr.nextBytes()
+		if !ok {
+			break
+		}
+		if !gjson.ValidBytes(line) {
+			continue
+		}
+		root := gjson.ParseBytes(line)
+		if !root.IsObject() {
+			continue
+		}
+		h.sessionID = root.Get("sessionId").Str
+		if h.sessionID != "" || codebuddyCBCConversationTypes[root.Get("type").Str] {
+			break
+		}
+	}
+	return h
+}
+
+// catalogKey returns the id that keys the catalog row of the transcript at
+// path: the session id it records, or its filename stem without one.
+func (h codebuddyCBCHeader) catalogKey(path string) string {
+	if h.sessionID != "" {
+		return h.sessionID
+	}
+	return codebuddyCBCIdentityForPath(path).runtimeID
 }
 
 // codebuddyCBCTranscript is a whole transcript read once.

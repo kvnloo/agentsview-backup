@@ -601,6 +601,64 @@ func TestCodeBuddyCBCStatHashFollowsOwnCatalogRow(t *testing.T) {
 	assert.NotEqual(t, before, probe.ComputeMultiFileStatHash(path))
 }
 
+// A transcript whose filename differs from the session id it records still
+// reads its catalog row: the row is keyed by the recorded id, while the
+// archive keeps the filename stem.
+func TestCodeBuddyCBCCatalogFollowsRecordedSessionID(t *testing.T) {
+	home, project := cbcHome(t)
+	path := filepath.Join(project, "file-stem.jsonl")
+	writeCBC(t, path,
+		`{"type":"session-meta","id":"m","sessionId":"run-x","meta":{}}`,
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-x","content":[{"type":"input_text","text":"hi"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}]}`,
+	)
+	writeCBC(t, filepath.Join(project, "parent.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":900,"sessionId":"parent","content":[{"type":"input_text","text":"first"}]}`)
+	writeCBCCatalog(t, home,
+		`INSERT INTO conversations (id, title, runtime_session_id) VALUES ('c-parent', 'Parent', 'parent')`,
+		`INSERT INTO conversations (id, title, custom_title, runtime_session_id, fork_source_id) VALUES ('c-x', 'T', 'Named in IDE', 'run-x', 'c-parent')`,
+		`INSERT INTO btw_entries VALUES ('c-x', '[{"id":"b1","question":"side q","answer":"side a","createdAt":2000}]')`,
+	)
+	results := parseCBCHome(t, home)
+	main := cbcSession(t, results, "codebuddy:file-stem")
+	assert.Equal(t, "run-x", main.Session.SourceSessionID)
+	assert.Equal(t, "Named in IDE", main.Session.SessionName)
+	assert.Equal(t, "codebuddy:parent", main.Session.ParentSessionID)
+	assert.Equal(t, RelFork, main.Session.RelationshipType)
+	btw := cbcSession(t, results, "codebuddy:file-stem:btw")
+	assert.Equal(t, "codebuddy:file-stem", btw.Session.ParentSessionID)
+
+	// The engine probes with a rootless provider.
+	probe, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+		NewProvider(ProviderConfig{Roots: []string{home}, Machine: "m"})
+	source, found, err := p.FindSource(t.Context(), FindSourceRequest{StoredFilePath: path})
+	require.NoError(t, err)
+	require.True(t, found)
+	fingerprint := func() string {
+		fp, err := p.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		return fp.Hash
+	}
+	catalog := filepath.Join(home, CodeBuddyCatalogDBName)
+	set := newCodeBuddyCBCSourceSet([]string{filepath.Join(home, "projects")}, "")
+	req := ChangedPathRequest{Path: catalog, WatchRoot: home}
+	_, err = set.SourcesForChangedPath(t.Context(), req)
+	require.NoError(t, err)
+	beforeStat, beforeHash := probe.ComputeMultiFileStatHash(path), fingerprint()
+	require.NotZero(t, beforeStat)
+
+	writeCBCCatalog(t, home, `UPDATE conversations SET custom_title = 'Renamed' WHERE id = 'c-x'`)
+	clearCodeBuddyCatalogCache()
+	assert.NotEqual(t, beforeStat, probe.ComputeMultiFileStatHash(path), "the recorded id's row feeds the stat hash")
+	assert.NotEqual(t, beforeHash, fingerprint(), "the recorded id's row feeds the fingerprint")
+	changed, err := set.SourcesForChangedPath(t.Context(), req)
+	require.NoError(t, err)
+	require.Len(t, changed, 1, "a catalog write for the recorded id reaches the transcript")
+	assert.Equal(t, path, changed[0].DisplayPath)
+}
+
 func TestCodeBuddyCBCDiscoveryContinuesPastUnreadableDirectories(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not block reads on Windows")

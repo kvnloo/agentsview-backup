@@ -22,7 +22,7 @@ func (c *codebuddyCatalog) fingerprint(runtimeID string) string {
 	}
 	h := sha256.New()
 	_, _ = fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00", e.conversationID,
-		e.title, e.customTitle, e.forkParentRawID)
+		e.title, e.customTitle, e.forkParentRuntimeID)
 	for _, entry := range e.btw {
 		codebuddyHashEntry(h, entry)
 	}

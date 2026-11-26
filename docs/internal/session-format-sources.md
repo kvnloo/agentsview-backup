@@ -5781,7 +5781,10 @@ schemas keep their existing ordering behavior.
   - Archive ids use the transcript stem; the CLI resumes the transcript's
     `sessionId` (stored as `source_session_id`). Catalog rows are keyed by
     that recorded `sessionId`, which AgentsView reads from the start of the
-    transcript and falls back to the stem without one. The IDE opens
+    transcript and falls back to the stem without one. A fork's
+    `fork_source_id` names the parent conversation; AgentsView links the fork
+    to the stem of the transcript that records the parent's runtime session
+    id, so the link holds when that stem differs from the id. The IDE opens
     `<scheme>://codebuddy-ide/conversation/open?id=<conversation id>`, with the
     id matching `^[A-Za-z0-9_-]{1,128}$` (IDE `codebuddyConversationDeepLink`).
     On Linux, AgentsView opens it with `xdg-open`, so

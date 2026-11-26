@@ -24,14 +24,17 @@ const CodeBuddyCatalogDBName = "codebuddy.db"
 // entry read from a catalog without the conversations table has no
 // conversationID, so the IDE cannot open it.
 type codebuddyCatalogEntry struct {
-	conversationID  string
-	runtimeID       string
-	title           string
-	customTitle     string
-	forkParentRawID string
-	deleted         bool
-	btw             []codebuddyBtwEntry
-	discussions     []codebuddyDiscussionThread
+	conversationID string
+	runtimeID      string
+	title          string
+	customTitle    string
+	// forkParentRuntimeID is the runtime session id of the conversation
+	// this one forked from. Parsing maps it to the parent's archive id,
+	// the filename of the transcript that records it.
+	forkParentRuntimeID string
+	deleted             bool
+	btw                 []codebuddyBtwEntry
+	discussions         []codebuddyDiscussionThread
 }
 
 // codebuddyBtwEntry is one /btw side question.
@@ -221,11 +224,11 @@ func readCodeBuddyCatalog(ctx context.Context, path string) (*codebuddyCatalog, 
 				return nil, err
 			}
 		}
-		// fork_source_id names the parent conversation; archive ids follow
-		// the parent's runtime session, which names its transcript.
+		// fork_source_id names the parent conversation; its transcript
+		// records the parent's runtime session id.
 		for _, entry := range byConversation {
-			if parent := byConversation[entry.forkParentRawID]; parent != nil {
-				entry.forkParentRawID = parent.runtimeID
+			if parent := byConversation[entry.forkParentRuntimeID]; parent != nil {
+				entry.forkParentRuntimeID = parent.runtimeID
 			}
 		}
 	}
@@ -335,7 +338,7 @@ func readCodeBuddyConversations(
 		}
 		e.title = strings.TrimSpace(e.title)
 		e.customTitle = strings.TrimSpace(e.customTitle)
-		e.forkParentRawID = strings.TrimSpace(forkSource)
+		e.forkParentRuntimeID = strings.TrimSpace(forkSource)
 		if e.runtimeID == "" {
 			e.runtimeID = e.conversationID
 		}

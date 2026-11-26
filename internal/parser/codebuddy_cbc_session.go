@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -128,8 +129,13 @@ func parseCodeBuddyCBCFile(
 	if in.catalog != nil {
 		title = firstNonEmptyJSONLString(in.catalog.customTitle, custom,
 			in.catalog.title, generated)
-		if in.catalog.forkParentRawID != "" && !ident.subagent {
-			base.ParentSessionID = "codebuddy:" + in.catalog.forkParentRawID
+		if in.catalog.forkParentRuntimeID != "" && !ident.subagent {
+			parent, err := codebuddyCBCRawIDForRuntime(ctx, in.path,
+				in.catalog.forkParentRuntimeID)
+			if err != nil {
+				return nil, err
+			}
+			base.ParentSessionID = "codebuddy:" + parent
 			base.RelationshipType = RelFork
 		}
 	}
@@ -193,6 +199,42 @@ func codebuddyHasAssistantContent(msgs []ParsedMessage) bool {
 		}
 	}
 	return false
+}
+
+// codebuddyCBCRawIDForRuntime returns the archive id of the main transcript
+// that records runtimeID, searched under the projects root holding path. The
+// IDE catalog names a conversation by the session id its transcript records,
+// while the archive names it by the transcript's filename, and the two can
+// differ. The transcript named after the id is checked first; otherwise the
+// start of each transcript is read. Without such a transcript the id itself is
+// returned.
+func codebuddyCBCRawIDForRuntime(
+	ctx context.Context, path, runtimeID string,
+) (string, error) {
+	root, ok := codebuddyCBCRootFromPath(path)
+	if !ok {
+		return runtimeID, nil
+	}
+	projectDir, _, _ := codebuddyCBCPathParts(path)
+	named := filepath.Join(projectDir, runtimeID+".jsonl")
+	if named != filepath.Clean(path) && codebuddyCBCSourcePath(root, named) {
+		info, err := os.Stat(named)
+		if err == nil && info.Mode().IsRegular() &&
+			readCodeBuddyCBCHeader(ctx, named).catalogKey(named) == runtimeID {
+			return runtimeID, nil
+		}
+	}
+	sources, err := codebuddyCBCSourceSet{roots: []string{root}}.
+		sourcesRecordingSessionIDs(ctx, map[string]bool{runtimeID: true})
+	if err != nil {
+		return "", err
+	}
+	for _, source := range sources {
+		if filepath.Clean(source.DisplayPath) != filepath.Clean(path) {
+			return codebuddyCBCIdentityForPath(source.DisplayPath).rawID, nil
+		}
+	}
+	return runtimeID, nil
 }
 
 // codebuddyStopReason prefers the producer's recorded terminal state and

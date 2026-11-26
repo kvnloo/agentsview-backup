@@ -603,7 +603,8 @@ func TestCodeBuddyCBCStatHashFollowsOwnCatalogRow(t *testing.T) {
 
 // A transcript whose filename differs from the session id it records still
 // reads its catalog row: the row is keyed by the recorded id, while the
-// archive keeps the filename stem.
+// archive keeps the filename stem. A fork links to its parent's archive id
+// even when the parent's filename also differs from its recorded id.
 func TestCodeBuddyCBCCatalogFollowsRecordedSessionID(t *testing.T) {
 	home, project := cbcHome(t)
 	path := filepath.Join(project, "file-stem.jsonl")
@@ -612,7 +613,7 @@ func TestCodeBuddyCBCCatalogFollowsRecordedSessionID(t *testing.T) {
 		`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-x","content":[{"type":"input_text","text":"hi"}]}`,
 		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"hello"}]}`,
 	)
-	writeCBC(t, filepath.Join(project, "parent.jsonl"),
+	writeCBC(t, filepath.Join(project, "parent-file.jsonl"),
 		`{"id":"u1","type":"message","role":"user","timestamp":900,"sessionId":"parent","content":[{"type":"input_text","text":"first"}]}`)
 	writeCBCCatalog(t, home,
 		`INSERT INTO conversations (id, title, runtime_session_id) VALUES ('c-parent', 'Parent', 'parent')`,
@@ -620,10 +621,14 @@ func TestCodeBuddyCBCCatalogFollowsRecordedSessionID(t *testing.T) {
 		`INSERT INTO btw_entries VALUES ('c-x', '[{"id":"b1","question":"side q","answer":"side a","createdAt":2000}]')`,
 	)
 	results := parseCBCHome(t, home)
+	parent := cbcSession(t, results, "codebuddy:parent-file")
+	assert.Equal(t, "parent", parent.Session.SourceSessionID, "the parent resumes by its recorded id")
+	assert.Equal(t, "Parent", parent.Session.SessionName)
 	main := cbcSession(t, results, "codebuddy:file-stem")
 	assert.Equal(t, "run-x", main.Session.SourceSessionID)
 	assert.Equal(t, "Named in IDE", main.Session.SessionName)
-	assert.Equal(t, "codebuddy:parent", main.Session.ParentSessionID)
+	assert.Equal(t, "codebuddy:parent-file", main.Session.ParentSessionID,
+		"the fork links to the parent's archive id, its filename")
 	assert.Equal(t, RelFork, main.Session.RelationshipType)
 	btw := cbcSession(t, results, "codebuddy:file-stem:btw")
 	assert.Equal(t, "codebuddy:file-stem", btw.Session.ParentSessionID)

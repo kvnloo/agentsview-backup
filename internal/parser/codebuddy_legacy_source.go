@@ -21,6 +21,9 @@ func newCodeBuddySourceSet(roots []string) codeBuddySourceSet {
 		WithIncludePath(isCodeBuddySourcePath),
 		WithProjectHint(codeBuddyProjectHintFromPath),
 		WithSessionIDFromPath(codeBuddySessionIDFromPath),
+		// A converted conversation's CBC transcript names the same session;
+		// the engine ranks this manifest against the transcript it archived.
+		WithSessionReconciliationIdentity(codeBuddySessionIDFromPath),
 		WithLookupIDValid(isCodeBuddyLookupID),
 		WithParseFile(codeBuddyParseFile),
 		WithForceReplace(),

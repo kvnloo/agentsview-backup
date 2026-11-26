@@ -248,6 +248,16 @@ type ReconciliationSourceRanker interface {
 	ReconciliationSourceRank(SourceRef) ReconciliationSourceRank
 }
 
+// StoredSourcePathRanker ranks an archived source path that no longer
+// resolves to a source, using only the path's layout. The engine asks it
+// when a candidate competes with a session whose stored file is gone, so a
+// lower-ranked copy cannot replace history only the vanished source held;
+// the missing source is then tombstoned instead. It returns false when the
+// layout carries no rank, which keeps the candidate eligible.
+type StoredSourcePathRanker interface {
+	RankStoredSourcePath(path string) (ReconciliationSourceRank, bool)
+}
+
 // ReconciliationMemberIdentityResolver derives the stable logical-member
 // identity stored in a full session ID. Providers whose virtual paths can be
 // reused declare this alongside SourceRef.ReconciliationIdentity so the engine

@@ -5791,6 +5791,10 @@ schemas keep their existing ordering behavior.
     Catalog rows with a `workspace_authority` belong to another machine and are
     ignored. Discussion entries follow genie's `sanitizeDiscussionEntry` and
     `isValidAnchor`.
+  - A converted transcript with at least one turn outranks the 4.x manifest of
+    the same id. The rank follows the archived transcript path after the file
+    is deleted (`RankStoredSourcePath`), so the 4.x copy cannot replace the
+    archived turns; reconciliation marks the session source-missing instead.
   - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
     member name, otherwise the subagent preset name. The CLI writes that name
     to each subagent item's `providerData.agent`; main transcripts carry
@@ -5835,9 +5839,10 @@ schemas keep their existing ordering behavior.
   sessions, catalog change selection),
   including a remote-server catalog without `conversations`,
   `internal/sync/codebuddy_cbc_integration_test.go` (usage deduplication across
-  forks, converted sessions, catalog renames, late and removed side files,
-  source deletion), and `internal/remotesync/codebuddy_test.go` (remote targets
-  and import). A local corpus of 1,961 sources (903 CBC) parsed with no
+  forks, converted sessions, deleted converted transcripts across sync, forced
+  sync, and full resync, catalog renames, late and removed side files, source
+  deletion), and `internal/remotesync/codebuddy_test.go` (remote targets and
+  import). A local corpus of 1,961 sources (903 CBC) parsed with no
   failures. A headless Linux host with CLI 2.146.0 and a remote-server catalog
   synced 210 sessions with no failures, and its `/btw` entries attached to
   their transcript. Some `/btw` entries record only an image count; those images were

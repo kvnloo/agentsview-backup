@@ -277,3 +277,69 @@ func TestSyncCodeBuddySourceDeletionKeepsArchive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, msgs, 2)
 }
+
+// CodeBuddy's cleanup deletes a converted conversation's transcript after its
+// retention period. Reconciliation marks the source missing and the archive
+// keeps the turns added after conversion; the frozen 4.x copy, even after it
+// changes, does not replace them on a sync, a forced sync, or a rebuild.
+func TestSyncCodeBuddyDeletedConvertedTranscriptKeepsArchive(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sync func(*Engine)
+	}{
+		{"sync", func(e *Engine) { e.SyncAll(t.Context(), nil) }},
+		{"forced sync", func(e *Engine) { e.SyncAllForceParse(t.Context(), nil) }},
+		{"full resync", func(e *Engine) {
+			st := e.ResyncAll(t.Context(), nil)
+			assert.False(t, st.Aborted, "%v", st.Warnings)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, project := cbcSyncHome(t)
+			legacyRoot := t.TempDir()
+			convDir := filepath.Join(legacyRoot, "history", "ws", "conv1")
+			require.NoError(t, os.MkdirAll(filepath.Join(convDir, "messages"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(convDir, "index.json"),
+				[]byte(`{"messages":[{"id":"u1","role":"user"}]}`), 0o600))
+			legacyMessage := filepath.Join(convDir, "messages", "u1.json")
+			require.NoError(t, os.WriteFile(legacyMessage,
+				[]byte(`{"role":"user","message":{"content":[{"type":"text","text":"first"}]}}`), 0o600))
+			transcript := filepath.Join(project, "conv1.jsonl")
+			writeCBCSync(t, transcript,
+				`{"type":"session-meta","id":"m","sessionId":"conv1","meta":{"codebuddy.ai/converterVersion":"ide-main-craft-jsonl/29"}}`,
+				`{"id":"u1","type":"message","role":"user","timestamp":1767225601000,"content":[{"type":"input_text","text":"first"}]}`,
+				`{"id":"u2","parentId":"u1","type":"message","role":"user","timestamp":1767225700000,"content":[{"type":"input_text","text":"continued in 5.x"}]}`,
+			)
+			// An unrelated live conversation lets a rebuild install.
+			writeCBCSync(t, filepath.Join(project, "other.jsonl"),
+				`{"id":"o1","type":"message","role":"user","timestamp":1767225800000,"content":[{"type":"input_text","text":"other"}]}`,
+			)
+			database := openTestDB(t)
+			engine := newCBCEngine(t, database, home, legacyRoot)
+			engine.SyncAll(t.Context(), nil)
+			assertConverted := func(msg string) *db.Session {
+				t.Helper()
+				sess, err := engine.db.GetSessionFull(t.Context(), "codebuddy:conv1")
+				require.NoError(t, err)
+				require.NotNil(t, sess, msg)
+				require.NotNil(t, sess.FilePath, msg)
+				assert.Equal(t, transcript, *sess.FilePath, msg)
+				assert.Equal(t, 2, sess.UserMessageCount, msg)
+				return sess
+			}
+			assertConverted("the transcript owns the converted conversation")
+
+			require.NoError(t, os.Remove(transcript))
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{home, legacyRoot}, false))
+			assertSourceMissingState(t, assertConverted("reconciliation keeps the archived turns"))
+			tc.sync(engine)
+			assertSourceMissingState(t, assertConverted("the converted turns survive the transcript's deletion"))
+
+			// A later edit to the 4.x copy does not replace them either.
+			require.NoError(t, os.WriteFile(legacyMessage,
+				[]byte(`{"role":"user","message":{"content":[{"type":"text","text":"first!"}]}}`), 0o600))
+			tc.sync(engine)
+			assertSourceMissingState(t, assertConverted("a changed 4.x copy does not replace the converted turns"))
+		})
+	}
+}

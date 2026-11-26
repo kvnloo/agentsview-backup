@@ -28,6 +28,7 @@ var (
 	_ Provider                     = (*codebuddyProvider)(nil)
 	_ StreamingDiscoverer          = (*codebuddyProvider)(nil)
 	_ ReconciliationSourceRanker   = (*codebuddyProvider)(nil)
+	_ StoredSourcePathRanker       = (*codebuddyProvider)(nil)
 	_ ReconciliationSourceResolver = (*codebuddyProvider)(nil)
 	_ MultiFileStatHasher          = (*codebuddyProvider)(nil)
 )
@@ -274,6 +275,20 @@ func (p *codebuddyProvider) ReconciliationSourceRank(source SourceRef) Reconcili
 		recency = info.ModTime().UnixNano()
 	}
 	return ReconciliationSourceRank{Class: class, Recency: recency}
+}
+
+// RankStoredSourcePath ranks an archived CBC transcript path after CodeBuddy
+// deleted the file, such as by its cleanupPeriodDays sweep. The archive then
+// keeps the turns added after a 4.x conversation was converted, instead of
+// taking the frozen 4.x copy, and the missing transcript is tombstoned. A
+// 4.x path carries no rank, so a 4.x session whose manifest is gone stays
+// replaceable as before.
+func (p *codebuddyProvider) RankStoredSourcePath(path string) (ReconciliationSourceRank, bool) {
+	root, ok := codebuddyCBCRootFromPath(path)
+	if !ok || filepath.Base(root) != "projects" {
+		return ReconciliationSourceRank{}, false
+	}
+	return ReconciliationSourceRank{Class: 2}, true
 }
 
 func (p *codebuddyProvider) SourceForReconciliation(

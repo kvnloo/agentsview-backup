@@ -49,6 +49,13 @@ even when their source files no longer exist. Schema repairs also require a full
 resync. Archive-only archives use the preservation rebuild, which does not read
 source files on the receiving host.
 
+When a provider ranks duplicate sources for one session, a lower-ranked copy
+replaces the archived session only if the stored source still resolves, or the
+provider does not implement `parser.StoredSourcePathRanker`. With that
+interface, a deleted stored source keeps the rank of its path layout, so the
+archive keeps its content and reconciliation marks it source-missing. A rebuild
+reads the stored path from the original archive.
+
 Full parser and archive-only preservation rebuilds serve the old archive while
 writes receive a retryable HTTP 503. Scoped upgrades serve saved rows while the
 affected providers reparse. Schema repairs still block startup. A failed or

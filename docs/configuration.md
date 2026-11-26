@@ -1450,7 +1450,10 @@ When IDE 5.x converts a 4.x conversation, AgentsView shows the converted
 transcript, which holds every later turn, and stops reading the frozen 4.x copy.
 The 4.x request totals and pasted images, which the converter does not copy, are
 still read from the 4.x directory. Conversations that were never converted keep
-their 4.x copy.
+their 4.x copy. If CodeBuddy later deletes the converted transcript, for example
+when it cleans up old sessions, the archive keeps the converted conversation with
+its later turns and marks its source missing; the 4.x copy does not replace it,
+including during a full resync.
 
 Each transcript shows the conversation path CodeBuddy would replay. Turns you
 rewound and resent stay visible as forked sessions, image attachments come from

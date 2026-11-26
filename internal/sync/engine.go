@@ -9497,8 +9497,21 @@ func (e *Engine) storedSourceRanksHigher(
 	stored, found, err := resolver.SourceForReconciliation(
 		ctx, storedPath, candidate.ProjectHint,
 	)
-	if err != nil || !found {
+	if err != nil {
 		return false, err
+	}
+	if !found {
+		pathRanker, ok := provider.(parser.StoredSourcePathRanker)
+		if !ok {
+			return false, nil
+		}
+		rank, ok := pathRanker.RankStoredSourcePath(storedPath)
+		if !ok {
+			return false, nil
+		}
+		return reconciliationSourceRankLower(
+			ranker.ReconciliationSourceRank(candidate), rank,
+		), nil
 	}
 	return reconciliationSourceRankLower(
 		ranker.ReconciliationSourceRank(candidate),
@@ -9524,6 +9537,11 @@ func (e *Engine) providerSourceLowerRanked(
 	)
 	fullSessionID = applyIDPrefixToID(e.idPrefix, fullSessionID)
 	storedPath := e.db.GetSessionFilePath(ctx, fullSessionID)
+	if archive, ok := e.archiveStore.(*db.DB); ok && storedPath == "" {
+		// A rebuild writes a fresh database; the session's preferred source
+		// is recorded in the original archive it replaces.
+		storedPath = archive.GetSessionFilePath(ctx, fullSessionID)
+	}
 	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
 }
 

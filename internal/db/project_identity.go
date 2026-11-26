@@ -1001,11 +1001,12 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		currentProject  string
 		agent           string
 		sourcePath      string
+		repositoryPath  string
 		rootPath        string
 	}
 	var restores []projectRestore
 	rows, err := tx.QueryContext(ctx, `
-		SELECT s.id, s.project, snap.project, s.agent, COALESCE(s.file_path, ''), snap.root_path
+		SELECT s.id, s.project, snap.project, s.agent, COALESCE(s.file_path, ''), snap.repository_path, snap.root_path
 		FROM sessions s
 		JOIN session_project_identity_snapshots snap
 		  ON snap.session_id = s.id
@@ -1029,6 +1030,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			&restore.currentProject,
 			&restore.agent,
 			&restore.sourcePath,
+			&restore.repositoryPath,
 			&restore.rootPath,
 		); err != nil {
 			rows.Close()
@@ -1051,16 +1053,25 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	}
 
 	kept := restores[:0]
-	var obsolete []projectRestore
 	for _, restore := range restores {
 		if restore.agent == string(parser.AgentCodex) && restore.previousProject != "" &&
 			parser.CodexSourceLabelForRoots(codexRoots, restore.sourcePath) == restore.previousProject {
 			continue
 		}
+		checkoutRoot := ""
+		if restore.repositoryPath != "" {
+			checkoutRoot = restore.rootPath
+		}
 		if restore.agent == string(parser.AgentCodex) && parser.CodexObsoleteLabel(
-			codexRoots, restore.sourcePath, restore.currentProject, restore.rootPath,
+			codexRoots, restore.sourcePath, restore.currentProject, checkoutRoot,
 		) {
-			obsolete = append(obsolete, restore)
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE session_project_identity_snapshots SET project = ? WHERE session_id = ?`,
+				restore.previousProject, restore.sessionID,
+			); err != nil {
+				return 0, fmt.Errorf("updating parsed Codex project snapshot: %w", err)
+			}
+			kept = append(kept, restore)
 			continue
 		}
 		if _, err := tx.ExecContext(ctx,
@@ -1084,27 +1095,12 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
 		return 0, err
 	}
-	for _, restore := range obsolete {
-		var repairedProject string
-		if err := tx.QueryRowContext(ctx, `SELECT project FROM sessions WHERE id = ?`, restore.sessionID).Scan(&repairedProject); err != nil {
-			return 0, fmt.Errorf("reading repaired Codex project: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE session_project_identity_snapshots SET project = ? WHERE session_id = ?`, restore.previousProject, restore.sessionID); err != nil {
-			return 0, fmt.Errorf("correcting Codex source label snapshot: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET project = ? WHERE id = ?`, restore.previousProject, restore.sessionID); err != nil {
-			return 0, fmt.Errorf("restoring parsed Codex project: %w", err)
-		}
-		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, tx, restore.sessionID, []string{restore.previousProject, restore.currentProject, repairedProject}); err != nil {
-			return 0, err
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf(
 			"committing session project identity restore: %w", err,
 		)
 	}
-	return len(kept) + len(obsolete), nil
+	return len(kept), nil
 }
 
 // reconcileSessionProjectIdentityAggregatesTx republishes only the immutable

@@ -15,31 +15,27 @@ func TestCodexObsoleteLabel(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
 	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")
-	ordinary := filepath.Join(root, "sessions", "2026", "10", "08", filepath.Base(source))
-	assert.True(t, CodexMarkedRunSession(source))
-	assert.False(t, CodexMarkedRunSession(ordinary))
 	for _, tc := range []struct {
-		name              string
-		current           []string
-		project, rootPath string
-		want              bool
+		name         string
+		current      []string
+		project      string
+		checkoutRoot string
+		source       string
+		want         bool
 	}{
-		{"narrowing", []string{sessions}, "team", filepath.Join(root, "checkout"), true},
-		{"unchanged label", []string{root}, "team", filepath.Join(root, "checkout"), false},
-		{"saved root confirms project", []string{sessions}, "team", filepath.Join(root, "team"), false},
-		{"different project", []string{sessions}, "checkout", filepath.Join(root, "checkout"), false},
+		{"narrowing", []string{sessions}, "team", filepath.Join(root, "checkout"), source, true},
+		{"saved checkout confirms project", []string{sessions}, "team", filepath.Join(root, "team"), source, false},
+		{"no saved checkout", []string{sessions}, "team", "", source, true},
+		{"unchanged label", []string{root}, "team", filepath.Join(root, "checkout"), source, false},
+		{"different project", []string{sessions}, "other", filepath.Join(root, "checkout"), source, false},
+		{"normalized checkout", nil, "my_app", filepath.Join(root, "my-app"), filepath.Join(root, "my_app", ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source)), false},
+		{"normalized label", nil, "my-app", filepath.Join(root, "my_app"), filepath.Join(root, "my-app", ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source)), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, source, tc.project, tc.rootPath))
+			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.source, tc.project, tc.checkoutRoot))
 		})
 	}
-	for _, tc := range []struct{ label, checkout string }{
-		{"my_app", "my-app"},
-		{"my-app", "my_app"},
-	} {
-		path := filepath.Join(root, tc.label, ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source))
-		assert.Equal(t, tc.label == "my-app", CodexObsoleteLabel(nil, path, tc.label, filepath.Join(root, tc.checkout)))
-	}
+
 }
 
 func TestCodexProjectIsSourceLabel(t *testing.T) {

@@ -52,7 +52,7 @@ func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, curren
 			continue
 		}
 		if unknown {
-			if !parser.CodexMarkedRunSession(record.FilePath) {
+			if !parser.CodexProjectIsSourceLabel(record.FilePath, ".") {
 				continue
 			}
 			if !changedPathWithinAnyRoot(record.FilePath, current) {

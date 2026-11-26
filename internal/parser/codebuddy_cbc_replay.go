@@ -3,6 +3,7 @@ package parser
 import (
 	"slices"
 	"sort"
+	"strconv"
 )
 
 // codebuddyCBCReplay returns the indexes of the producer's active history,
@@ -148,14 +149,37 @@ func codebuddyActiveHistory(
 	return out
 }
 
-// codebuddyCBCBranch is one preserved alternative path.
+// codebuddyCBCBranch is one preserved alternative path. key names the fork
+// session under the conversation's session.
 type codebuddyCBCBranch struct {
 	indexes []int
+	key     string
 }
 
-// codebuddyCBCAlternatives groups conversation items outside the active
-// path into connected alternative branches. A branch starts at an item whose
-// parent is not itself an alternative item.
+// codebuddyCBCPrefixRepeat bounds how many times over the alternative items'
+// size shared ancestors may be repeated across branches. A branch past the
+// bound keeps only the items it does not share with an earlier branch.
+const codebuddyCBCPrefixRepeat = 4
+
+// codebuddyCBCNode is one alternative turn item, or a run of adjacent items
+// that repeat one id, in the tree of items outside the active path.
+type codebuddyCBCNode struct {
+	items    []int
+	usage    []int
+	children []int
+	parent   int
+	// pathBytes is the raw size of this node and its ancestors.
+	pathBytes int
+}
+
+// codebuddyCBCAlternatives splits the conversation items outside the active
+// path into replayable branches, one for each leaf of the tree their parent
+// links form. A branch repeats the alternative ancestors it shares with
+// another branch, so each reads as one coherent history; repeated responses
+// keep their usage identity and count once. The first branch under each
+// root is keyed by the root's id, as a branch without divergent
+// continuations always was; each later branch adds the id of the item where
+// it diverges.
 func codebuddyCBCAlternatives(
 	items []codebuddyCBCItem, active []int,
 ) []codebuddyCBCBranch {
@@ -172,40 +196,129 @@ func codebuddyCBCAlternatives(
 			byID[it.id] = i
 		}
 	}
-	var off []int
-	offSet := make(map[int]bool)
+	var nodes []codebuddyCBCNode
+	nodeOf := make(map[int]int)
+	var usage []int
 	for i, it := range items {
-		if (it.custom() && it.itemType != "model-usage") || onPath[i] {
+		if onPath[i] {
+			continue
+		}
+		if it.itemType == "model-usage" {
+			usage = append(usage, i)
+			continue
+		}
+		if it.custom() {
 			continue
 		}
 		if it.providerData().Get("contentFilterNotice").Bool() {
 			// The notice replaced a filtered turn; it is not a user branch.
 			continue
 		}
-		off = append(off, i)
-		offSet[i] = true
+		if n, ok := nodeOf[i-1]; ok && it.id != "" && items[i-1].id == it.id {
+			nodes[n].items = append(nodes[n].items, i)
+			nodeOf[i] = n
+			continue
+		}
+		nodes = append(nodes, codebuddyCBCNode{items: []int{i}, parent: -1})
+		nodeOf[i] = len(nodes) - 1
 	}
-	if len(off) == 0 {
+	if len(nodes) == 0 {
 		return nil
 	}
-	branchOf := make(map[int]int)
-	var branches []codebuddyCBCBranch
-	for _, idx := range off {
+	// parentNode finds the alternative node an item continues. Parents
+	// precede their children, so the links form a forest even when a
+	// transcript's ids repeat or loop.
+	parentNode := func(idx int) int {
 		it := items[idx]
 		parent := it.parentID
 		if parent == "" {
 			parent = it.logicalParentID
 		}
-		parentIdx, hasParent := byID[parent]
-		if hasParent && offSet[parentIdx] {
-			if b, ok := branchOf[parentIdx]; ok {
-				branches[b].indexes = append(branches[b].indexes, idx)
-				branchOf[idx] = b
+		p, ok := byID[parent]
+		if !ok || p >= idx {
+			return -1
+		}
+		if n, ok := nodeOf[p]; ok {
+			return n
+		}
+		return -1
+	}
+	total := 0
+	for n := range nodes {
+		node := &nodes[n]
+		node.parent = parentNode(node.items[0])
+		if node.parent >= 0 {
+			nodes[node.parent].children = append(nodes[node.parent].children, n)
+		}
+	}
+	for _, idx := range usage {
+		if n := parentNode(idx); n >= 0 {
+			nodes[n].usage = append(nodes[n].usage, idx)
+		}
+	}
+	for n := range nodes {
+		size := 0
+		for _, idx := range slices.Concat(nodes[n].items, nodes[n].usage) {
+			size += len(items[idx].raw.Raw)
+		}
+		total += size
+		if p := nodes[n].parent; p >= 0 {
+			size += nodes[p].pathBytes
+		}
+		nodes[n].pathBytes = size
+	}
+	budget := codebuddyCBCPrefixRepeat * total
+	used := make(map[string]bool)
+	emitted := make([]bool, len(nodes))
+	var branches []codebuddyCBCBranch
+	for root := range nodes {
+		if nodes[root].parent >= 0 {
+			continue
+		}
+		rootKey := items[nodes[root].items[0]].id
+		stack := []int{root}
+		for len(stack) > 0 {
+			n := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if children := nodes[n].children; len(children) > 0 {
+				for _, c := range slices.Backward(children) {
+					stack = append(stack, c)
+				}
 				continue
 			}
+			// The leaf's own items run up to the first ancestor an earlier
+			// branch already holds.
+			var path []int
+			top := n
+			for m := n; m >= 0 && !emitted[m]; m = nodes[m].parent {
+				emitted[m] = true
+				path = append(path, m)
+				top = m
+			}
+			key := rootKey
+			if top != root {
+				key += "-" + items[nodes[top].items[0]].id
+				if p := nodes[top].parent; nodes[p].pathBytes <= budget {
+					budget -= nodes[p].pathBytes
+					for m := p; m >= 0; m = nodes[m].parent {
+						path = append(path, m)
+					}
+				}
+			}
+			if used[key] {
+				// Ids missing or repeated in the transcript still give each
+				// branch its own session.
+				key += "-" + strconv.Itoa(items[nodes[n].items[0]].index)
+			}
+			used[key] = true
+			var indexes []int
+			for _, m := range path {
+				indexes = append(indexes, nodes[m].items...)
+				indexes = append(indexes, nodes[m].usage...)
+			}
+			sort.Ints(indexes)
+			branches = append(branches, codebuddyCBCBranch{indexes: indexes, key: key})
 		}
-		branches = append(branches, codebuddyCBCBranch{indexes: []int{idx}})
-		branchOf[idx] = len(branches) - 1
 	}
 	return branches
 }

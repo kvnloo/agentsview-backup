@@ -158,9 +158,8 @@ func parseCodeBuddyCBCFile(
 		if alt.userCount == 0 && !codebuddyHasAssistantContent(alt.messages) {
 			continue
 		}
-		first := t.items[branch.indexes[0]]
 		fork := base
-		fork.ID = base.ID + "-" + first.id
+		fork.ID = base.ID + "-" + branch.key
 		fork.ParentSessionID = base.ID
 		fork.RelationshipType = RelFork
 		fork.SourceSessionID = ""

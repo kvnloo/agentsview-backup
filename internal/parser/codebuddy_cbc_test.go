@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -954,4 +955,55 @@ func TestCodeBuddyCBCRewoundBeforeFirstMessageKeepsHistory(t *testing.T) {
 			assert.Equal(t, "old answer", fork.Messages[1].Content)
 		})
 	}
+}
+
+// Replacing a rewound second turn and then rewinding the first leaves two
+// incompatible continuations of the same first turn. Each becomes its own
+// fork that repeats the shared turn, and the shared response's usage keeps
+// one identity so it counts once.
+func TestCodeBuddyCBCDivergentBranchesSplit(t *testing.T) {
+	home, project := cbcHome(t)
+	usage := func(req string, out int) string {
+		return `"providerData":{"conversationRequestId":"` + req + `","messageId":"m","stepSeq":1,"rawUsage":{"prompt_tokens":10,"completion_tokens":` + strconv.Itoa(out) + `}}`
+	}
+	writeCBC(t, filepath.Join(project, "s5.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"first"}]}`,
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"shared reply"}],`+usage("r1", 1)+`}`,
+		`{"id":"u2","parentId":"a1","type":"message","role":"user","timestamp":1002,"content":[{"type":"input_text","text":"second"}]}`,
+		`{"id":"a2","parentId":"u2","type":"message","role":"assistant","timestamp":1003,"content":[{"type":"output_text","text":"second reply"}],`+usage("r2", 10)+`}`,
+		`{"id":"n1","parentId":"a1","type":"resend-fork-notice","timestamp":1004}`,
+		`{"id":"u3","parentId":"a1","type":"message","role":"user","timestamp":1005,"content":[{"type":"input_text","text":"second again"}]}`,
+		`{"id":"a3","parentId":"u3","type":"message","role":"assistant","timestamp":1006,"content":[{"type":"output_text","text":"replacement reply"}],`+usage("r3", 100)+`}`,
+		`{"id":"n2","type":"resend-fork-notice","timestamp":1007}`,
+		`{"id":"u4","type":"message","role":"user","timestamp":1008,"content":[{"type":"input_text","text":"new first"}]}`,
+		`{"id":"a4","parentId":"u4","type":"message","role":"assistant","timestamp":1009,"content":[{"type":"output_text","text":"new reply"}],`+usage("r4", 1000)+`}`,
+	)
+	results := parseCBCHome(t, home)
+	require.Len(t, results, 3)
+	texts := func(r ParseResult) []string {
+		var out []string
+		for _, m := range r.Messages {
+			out = append(out, m.Content)
+		}
+		return out
+	}
+	assert.Equal(t, []string{"new first", "new reply"}, texts(cbcSession(t, results, "codebuddy:s5")))
+	assert.Equal(t, []string{"first", "shared reply", "second", "second reply"},
+		texts(cbcSession(t, results, "codebuddy:s5-u1")), "the first branch keeps its earlier id")
+	assert.Equal(t, []string{"first", "shared reply", "second again", "replacement reply"},
+		texts(cbcSession(t, results, "codebuddy:s5-u1-u3")))
+
+	byIdentity := map[string]int{}
+	for _, r := range results {
+		for _, m := range r.Messages {
+			if m.SourceUUID != "" && m.HasOutputTokens {
+				byIdentity[m.SourceUUID] = m.OutputTokens
+			}
+		}
+	}
+	total := 0
+	for _, out := range byIdentity {
+		total += out
+	}
+	assert.Equal(t, 1111, total, "each response counts once across the forks")
 }

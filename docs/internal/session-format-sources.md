@@ -5797,6 +5797,13 @@ schemas keep their existing ordering behavior.
     the same id. The rank follows the archived transcript path after the file
     is deleted (`RankStoredSourcePath`), so the 4.x copy cannot replace the
     archived turns; reconciliation marks the session source-missing instead.
+  - A converted transcript's fingerprint covers its 4.x conversation
+    directory: whether it exists under the configured 4.x roots, its
+    `index.json`, `messages/` and each message file, and `assets/`. A
+    4.x change event under `history/<ws>/<id>/` also selects the transcript
+    named `<id>`. The warm stat digest returns 0 for converted transcripts,
+    because the engine computes it without the configured 4.x roots, so the
+    full fingerprint decides their freshness.
   - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
     member name, otherwise the subagent preset name. The CLI writes that name
     to each subagent item's `providerData.agent`; main transcripts carry

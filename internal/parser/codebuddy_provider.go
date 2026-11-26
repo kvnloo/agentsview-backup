@@ -220,7 +220,42 @@ func (p *codebuddyProvider) SourcesForChangedPath(
 	if err != nil || len(cbc) > 0 {
 		return cbc, err
 	}
-	return p.legacy.SourcesForChangedPath(ctx, req)
+	legacy, err := p.legacy.SourcesForChangedPath(ctx, req)
+	if err != nil {
+		return legacy, err
+	}
+	converted, err := p.cbcReadingLegacyPath(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return append(legacy, converted...), nil
+}
+
+// cbcReadingLegacyPath maps a path in a 4.x conversation directory to the
+// CBC transcript of the same conversation. A converted conversation reads
+// its 4.x usage and images from that directory, so a change there, or the
+// directory appearing, refreshes it.
+func (p *codebuddyProvider) cbcReadingLegacyPath(
+	ctx context.Context, req ChangedPathRequest,
+) ([]SourceRef, error) {
+	if len(p.cbc.roots) == 0 {
+		return nil, nil
+	}
+	for _, root := range p.legacy.roots {
+		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
+			continue
+		}
+		id, ok := codebuddyLegacyConversationID(root, req.Path)
+		if !ok {
+			continue
+		}
+		source, found, err := p.cbc.FindSource(ctx, FindSourceRequest{RawSessionID: id})
+		if err != nil || !found {
+			return nil, err
+		}
+		return []SourceRef{source}, nil
+	}
+	return nil, nil
 }
 
 // FindSource prefers the CBC transcript: a converted 4.x conversation keeps
@@ -393,11 +428,17 @@ func (p *codebuddyProvider) SourceForReconciliation(
 // the transcript records, so a warm process can skip unchanged CBC sources
 // without hashing them, while a catalog write for another conversation leaves
 // this digest alone. The engine calls it on a rootless probe provider, so the
-// root comes from the path's own layout. 4.x manifests keep content
-// verification.
+// root comes from the path's own layout. A conversation converted from 4.x
+// also reads its 4.x directory under the configured 4.x roots, which the
+// probe does not know, so it returns 0 and the full fingerprint decides. 4.x
+// manifests keep content verification.
 func (p *codebuddyProvider) ComputeMultiFileStatHash(path string) uint64 {
 	root, ok := codebuddyCBCRootFromPath(path)
 	if !ok {
+		return 0
+	}
+	header := readCodeBuddyCBCHeader(context.Background(), path)
+	if header.converted {
 		return 0
 	}
 	// Each saved tool output counts by its own metadata: rewriting one in
@@ -413,7 +454,7 @@ func (p *codebuddyProvider) ComputeMultiFileStatHash(path string) uint64 {
 	}
 	row, err := codebuddyCatalogRowFingerprint(
 		context.Background(), codebuddyCatalogPathForProjects(root),
-		readCodeBuddyCBCHeader(context.Background(), path).catalogKey(path),
+		header.catalogKey(path),
 	)
 	if err != nil {
 		return 0

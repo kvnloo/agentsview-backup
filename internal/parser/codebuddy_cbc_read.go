@@ -101,6 +101,13 @@ type codebuddyCBCHeader struct {
 	// that keys the conversation's catalog row. It can differ from the
 	// filename stem, which names the archived session.
 	sessionID string
+	// cwd is the working directory recorded up to that line; empty when
+	// the header does not record one.
+	cwd string
+	// converted reports a conversation the IDE converted from 4.x. The
+	// converter writes its session-meta, with the session id and working
+	// directory, as the first line.
+	converted bool
 }
 
 // The header read stops at the first line carrying a sessionId, which
@@ -139,7 +146,12 @@ func readCodeBuddyCBCHeader(ctx context.Context, path string) codebuddyCBCHeader
 			continue
 		}
 		h.sessionID = root.Get("sessionId").Str
-		if h.sessionID != "" || codebuddyCBCConversationTypes[root.Get("type").Str] {
+		h.cwd = firstNonEmptyJSONLString(h.cwd, root.Get("cwd").Str)
+		itemType := root.Get("type").Str
+		if itemType == "session-meta" && root.Get(`meta.codebuddy\.ai/converterVersion`).Str != "" {
+			h.converted = true
+		}
+		if h.sessionID != "" || codebuddyCBCConversationTypes[itemType] {
 			break
 		}
 	}

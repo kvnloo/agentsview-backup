@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -193,6 +195,60 @@ func loadCodeBuddyLegacyCompanion(
 		out.order = append(out.order, k.id)
 	}
 	return out
+}
+
+// writeCodeBuddyLegacyCompanionState writes the state of what a converted
+// conversation reads from its 4.x directory: where the directory is, its
+// manifest, its messages directory and each message file, and its assets
+// directory. A change to any of them, or the directory appearing, changes
+// the written state. A missing directory writes only its absence.
+func writeCodeBuddyLegacyCompanionState(
+	ctx context.Context, w io.Writer, roots []string, cwd, id string,
+) error {
+	dir := codebuddyLegacySessionDir(ctx, roots, cwd, id)
+	if dir == "" {
+		_, _ = io.WriteString(w, "legacy\x00absent\x00")
+		return ctx.Err()
+	}
+	_, _ = fmt.Fprintf(w, "legacy\x00%s\x00", dir)
+	messages := filepath.Join(dir, "messages")
+	paths := []string{filepath.Join(dir, "index.json"), messages, filepath.Join(dir, "assets")}
+	entries, _ := os.ReadDir(messages)
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".json") {
+			paths = append(paths, filepath.Join(messages, entry.Name()))
+		}
+	}
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		info, err := os.Stat(path)
+		if err != nil {
+			_, _ = fmt.Fprintf(w, "missing\x00%s\x00", filepath.ToSlash(rel))
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "file\x00%s\x00%d\x00%d\x00",
+			filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano())
+	}
+	return nil
+}
+
+// codebuddyLegacyConversationID returns the conversation id of a path in a
+// 4.x conversation directory, history/<ws>/<id>/..., under root.
+func codebuddyLegacyConversationID(root, path string) (string, bool) {
+	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "history" && IsValidSessionID(parts[i+1]) && IsValidSessionID(parts[i+2]) {
+			return parts[i+2], true
+		}
+	}
+	return "", false
 }
 
 // codebuddyInsertLegacyUsage adds a hidden usage row for each 4.x request

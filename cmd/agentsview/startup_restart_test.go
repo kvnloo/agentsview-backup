@@ -107,7 +107,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.scoped {
-				oldVersion := db.CurrentDataVersion() - 1
+				oldVersion := 188
 				require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()),
 					"fixture must exercise a scoped parser upgrade")
 				conn, err := sql.Open("sqlite3", cfg.DBPath)

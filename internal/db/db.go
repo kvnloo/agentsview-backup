@@ -708,7 +708,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // canonical input_image blocks so image retention, offload, and image_text
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
-const dataVersion = 189
+// (190: older binaries cannot preserve inferred parent state.)
+const dataVersion = 190
 
 const archiveOnlyVersionBase = 1 << 20
 

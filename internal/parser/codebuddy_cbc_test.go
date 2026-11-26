@@ -646,6 +646,38 @@ func TestCodeBuddyCBCDiscoveryContinuesPastUnreadableDirectories(t *testing.T) {
 	}
 }
 
+func TestCodeBuddyDiscoveryKeepsReadableSourcesPastUnreadableCLIDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	projects := filepath.Join(t.TempDir(), "projects")
+	readable := filepath.Join(projects, "b-readable", "s1.jsonl")
+	writeCBC(t, readable, line)
+	blocked := filepath.Join(projects, "a-blocked")
+	writeCBC(t, filepath.Join(blocked, "s2.jsonl"), line)
+	require.NoError(t, os.Chmod(blocked, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+	legacyRoot := t.TempDir()
+	manifest := filepath.Join(legacyRoot, "history", "ws", "conv-1", "index.json")
+	writeCBC(t, manifest, `{"messages":[]}`)
+
+	p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+		NewProvider(ProviderConfig{Roots: []string{projects, legacyRoot}, Machine: "m"})
+	require.True(t, p.Capabilities().Sync.PartialDiscovery)
+	sources, err := p.Discover(t.Context())
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete, "the unreadable directory marks discovery incomplete")
+	var paths []string
+	for _, source := range sources {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.Contains(t, paths, readable, "a readable CLI transcript is still returned")
+	assert.Contains(t, paths, manifest, "the 4.x history is still searched")
+}
 func TestCodeBuddyCBCSourcePathRejectsUnusableStems(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	for _, tc := range []struct {

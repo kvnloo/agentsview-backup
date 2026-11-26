@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -103,17 +104,33 @@ type codebuddyProvider struct {
 	cbc    codebuddyCBCSourceSet
 }
 
+// Discover returns every source it could read. When a directory is
+// unreadable it still returns the readable sources, together with the
+// DiscoveryIncompleteError, so the engine syncs them without tombstoning.
 func (p *codebuddyProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectDiscoveredSources(ctx, p.DiscoverEach)
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	err := p.DiscoverEach(ctx, func(source SourceRef) error {
+		addJSONLSource(source, &sources, seen)
+		return nil
+	})
+	sortJSONLSources(sources)
+	return sources, err
 }
 
+// DiscoverEach yields the CLI and IDE 5.x transcripts, then the IDE 4.x
+// manifests. An unreadable CLI directory does not stop the 4.x roots from
+// being searched; cancellation and yield failures still stop at once.
 func (p *codebuddyProvider) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
-	if err := p.cbc.DiscoverEach(ctx, yield); err != nil {
-		return err
+	cbcErr := p.cbc.DiscoverEach(ctx, yield)
+	if cbcErr != nil {
+		if _, incomplete := errors.AsType[DiscoveryIncompleteError](cbcErr); !incomplete || ctx.Err() != nil {
+			return cbcErr
+		}
 	}
-	return p.legacy.DiscoverEach(ctx, yield)
+	return errors.Join(cbcErr, p.legacy.DiscoverEach(ctx, yield))
 }
 
 func (p *codebuddyProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -361,6 +378,9 @@ func codeBuddyProviderCapabilities() Capabilities {
 		Sync: ProviderSyncSemantics{
 			FingerprintHashRequiredForFreshness: true,
 			FingerprintHashInCacheKey:           true,
+			// An unreadable CLI directory must not hide the readable
+			// conversations beside it or the IDE 4.x history.
+			PartialDiscovery: true,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

@@ -438,6 +438,16 @@ checks cheaply, over the parsed messages and before any store read, whether
 anything is flagged before loading the archived session. Rebuilds read the old
 archive, and S3 Claude sessions follow the same rule.
 
+CodeBuddy CLI and IDE 5.x transcripts share the side-file layout and the same
+restore. A CodeBuddy rewind moves a call from its conversation to a branch
+session whose own archive lacks the output. Before a sync rewrites any session
+of a transcript, it reads the archived rows of every session saved from that
+transcript that the user has not trashed or deleted, including sessions whose
+source is missing, and keeps only the outputs its writes flagged
+(`ingest.SourceToolResults`). One index serves every branch of the
+transcript. A branch restores an output from the other sessions only when its
+own archive lacks the identity and every other session holds the same text.
+
 ### Codex deletion scope
 
 Before data version 131, deleting a Codex-format thread excluded all its rollout

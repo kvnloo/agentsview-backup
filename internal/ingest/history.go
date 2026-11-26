@@ -24,15 +24,105 @@ const (
 type PriorSession struct {
 	Session  db.Session
 	Messages []db.Message
-	// RelatedMessages are archived rows of other sessions read from the same
-	// source, such as a CodeBuddy conversation and its rewound branches.
-	// Persisted tool-result restore uses them only for an identity the
-	// session's own rows lack, and only when every related copy agrees.
-	RelatedMessages []db.Message
+	// SourceToolResults holds tool results archived by the sessions saved
+	// from the same source, such as a CodeBuddy conversation and its rewound
+	// branches. Persisted tool-result restore uses it only for an identity
+	// the session's own rows lack, and only when every other session agrees.
+	SourceToolResults *SourceToolResults
 	// LoadMessages optionally supplies retained rows only when a history policy
 	// needs them. It takes precedence over Messages; callers own read errors
 	// and any caching needed across reconciliation and later preservation.
 	LoadMessages func(context.Context) ([]db.Message, error)
+}
+
+// SourceToolResults indexes the archived tool results that sessions saved
+// from one source hold for persisted outputs a sync could not resolve. A
+// CodeBuddy rewind moves a call from its conversation to a branch, so the
+// branch's own archive lacks the output the conversation saved. Build one
+// index per source and share it across that source's sessions; each lookup
+// skips the session being reconciled.
+type SourceToolResults struct {
+	wanted map[toolResultEventIdentity]bool
+	saved  map[toolResultEventIdentity][]savedToolResult
+}
+
+type savedToolResult struct {
+	sessionID string
+	event     db.ToolResultEvent
+}
+
+// Want requests the tool results that messages flag as unresolved persisted
+// outputs. Call it for every session that will use the index before Add.
+func (s *SourceToolResults) Want(messages []parser.ParsedMessage) {
+	for key := range flaggedPersistedToolResultIdentities(messages) {
+		if s.wanted == nil {
+			s.wanted = make(map[toolResultEventIdentity]bool)
+		}
+		s.wanted[key] = true
+	}
+}
+
+// Wants reports whether any tool result was requested.
+func (s *SourceToolResults) Wants() bool {
+	return len(s.wanted) > 0
+}
+
+// Add keeps the requested tool results archived in one session's rows.
+// Other rows are not retained, so a caller can read sessions one at a time.
+func (s *SourceToolResults) Add(sessionID string, messages []db.Message) {
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			for _, event := range call.ResultEvents {
+				key := toolResultEventIdentity{
+					toolUseID: event.ToolUseID, source: event.Source,
+					timestamp: event.Timestamp,
+				}
+				if !s.wanted[key] {
+					continue
+				}
+				if s.saved == nil {
+					s.saved = make(map[toolResultEventIdentity][]savedToolResult)
+				}
+				s.saved[key] = append(s.saved[key], savedToolResult{
+					sessionID: sessionID, event: event,
+				})
+			}
+		}
+	}
+}
+
+// Found reports whether any requested tool result was archived.
+func (s *SourceToolResults) Found() bool {
+	return s != nil && len(s.saved) > 0
+}
+
+// agreed returns the event the sessions other than sessionID archived for
+// key, when every one of them holds the same text.
+func (s *SourceToolResults) agreed(
+	key toolResultEventIdentity, sessionID string,
+) (db.ToolResultEvent, bool) {
+	if s == nil {
+		return db.ToolResultEvent{}, false
+	}
+	var first *db.ToolResultEvent
+	for i := range s.saved[key] {
+		saved := &s.saved[key][i]
+		if saved.sessionID == sessionID {
+			continue
+		}
+		if first == nil {
+			first = &saved.event
+			continue
+		}
+		if saved.event.Content != first.Content ||
+			saved.event.ContentLength != first.ContentLength {
+			return db.ToolResultEvent{}, false
+		}
+	}
+	if first == nil {
+		return db.ToolResultEvent{}, false
+	}
+	return *first, true
 }
 
 func (p *PriorSession) loadMessages(ctx context.Context) error {
@@ -204,15 +294,6 @@ func reconcileClaudePersistedToolResults(
 		return HistoryResult{}, err
 	}
 	archived := archivedToolResultEventsByIdentity(prior.Messages)
-	for key, events := range archivedToolResultEventsByIdentity(prior.RelatedMessages) {
-		if _, own := archived[key]; own || !sameToolResultContent(events) {
-			continue
-		}
-		if archived == nil {
-			archived = make(map[toolResultEventIdentity][]db.ToolResultEvent)
-		}
-		archived[key] = events[:1]
-	}
 	currentCounts := currentToolResultIdentityCounts(candidate.Messages)
 	type callPos struct{ mi, ci int }
 	var touched []callPos
@@ -232,6 +313,15 @@ func reconcileClaudePersistedToolResults(
 					continue
 				}
 				matches := archived[key]
+				if len(matches) == 0 {
+					// The session's own archive lacks the call; a rewind
+					// may have moved it here from a sibling that saved it.
+					if saved, ok := prior.SourceToolResults.agreed(
+						key, candidate.Session.ID,
+					); ok {
+						matches = []db.ToolResultEvent{saved}
+					}
+				}
 				if len(matches) != 1 {
 					continue
 				}
@@ -366,16 +456,4 @@ func archivedToolResultEventsByIdentity(
 		}
 	}
 	return archived
-}
-
-// sameToolResultContent reports whether every event holds the same text, as
-// when rewound branches repeat a turn they share with their conversation.
-func sameToolResultContent(events []db.ToolResultEvent) bool {
-	for _, event := range events[1:] {
-		if event.Content != events[0].Content ||
-			event.ContentLength != events[0].ContentLength {
-			return false
-		}
-	}
-	return true
 }

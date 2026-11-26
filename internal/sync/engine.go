@@ -10756,11 +10756,12 @@ type pendingWrite struct {
 	verifiedMtime       int64
 	verifiedStateOK     bool
 	unresolvedForkEpoch uint64
-	// relatedArchive holds archived rows of the other sessions read from
-	// this write's CodeBuddy transcript, loaded before any of them is
-	// rewritten so a rewound branch can restore a saved tool output its
-	// conversation archived. See preloadRelatedSourceArchives.
-	relatedArchive []db.Message
+	// sourceToolResults indexes the saved tool outputs archived by the
+	// sessions of this write's CodeBuddy transcript, read before any of them
+	// is rewritten so a rewound branch can restore an output its
+	// conversation archived. Writes from one transcript share one index.
+	// See preloadRelatedSourceArchives.
+	sourceToolResults *ingest.SourceToolResults
 }
 
 type sessionWriteIdentityReader interface {
@@ -11637,7 +11638,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
-	history, err := e.reconcileProviderHistory(ctx, candidate, pw.relatedArchive)
+	history, err := e.reconcileProviderHistory(ctx, candidate, pw.sourceToolResults)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
@@ -11740,79 +11741,78 @@ func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 	return false
 }
 
-// preloadRelatedSourceArchives gives each CodeBuddy write whose saved tool
-// output is gone the archived rows of the other sessions from its
-// transcript. It reads them before the batch rewrites any of them: after a
-// rewind, the conversation's new copy no longer holds the call its branch
-// now shows.
+// preloadRelatedSourceArchives gives the CodeBuddy writes whose saved tool
+// outputs are gone one shared index per transcript of the outputs its
+// sessions archived. It reads them before the batch rewrites any of them:
+// after a rewind, the conversation's new copy no longer holds the call its
+// branch now shows. Each transcript's sessions are read once however many
+// branches need an output, and the index keeps only the requested outputs.
 func (e *Engine) preloadRelatedSourceArchives(
 	ctx context.Context, batch []pendingWrite,
 ) error {
-	var bySource map[string]map[string][]db.Message
+	var bySource map[string]*ingest.SourceToolResults
+	var paths []string
 	for i := range batch {
 		pw := &batch[i]
 		if pw.sess.Agent != parser.AgentCodeBuddy || pw.sess.File.Path == "" ||
-			pw.relatedArchive != nil || !hasUnresolvedPersistedToolResult(pw.msgs) {
+			pw.sourceToolResults != nil || !hasUnresolvedPersistedToolResult(pw.msgs) {
 			continue
 		}
 		path := e.effectiveSourcePath(pw.sess.File.Path)
-		bySession, ok := bySource[path]
+		index, ok := bySource[path]
 		if !ok {
-			var err error
-			bySession, err = e.archivedSourceMessages(ctx, path, pw.sess.Agent)
-			if err != nil {
-				return err
-			}
 			if bySource == nil {
-				bySource = make(map[string]map[string][]db.Message)
+				bySource = make(map[string]*ingest.SourceToolResults)
 			}
-			bySource[path] = bySession
+			index = &ingest.SourceToolResults{}
+			bySource[path] = index
+			paths = append(paths, path)
 		}
-		pw.relatedArchive = relatedArchivedMessages(
-			bySession, applyIDPrefixToID(e.idPrefix, pw.sess.ID),
-		)
+		index.Want(pw.msgs)
+		pw.sourceToolResults = index
+	}
+	for _, path := range paths {
+		if err := e.loadSourceToolResults(
+			ctx, bySource[path], path, parser.AgentCodeBuddy,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// archivedSourceMessages reads the archived rows of every session stored
-// from path, keyed by session ID.
-func (e *Engine) archivedSourceMessages(
-	ctx context.Context, path string, agent parser.AgentType,
-) (map[string][]db.Message, error) {
+// loadSourceToolResults adds to index the requested tool outputs archived by
+// every session stored from path that the user has not deleted. Sessions
+// whose source is missing still count: a rewind to before the first message
+// leaves the conversation empty, and its archive holds the outputs its
+// branches need. Rows are read one session at a time and dropped after
+// indexing.
+func (e *Engine) loadSourceToolResults(
+	ctx context.Context, index *ingest.SourceToolResults,
+	path string, agent parser.AgentType,
+) error {
+	if !index.Wants() {
+		return nil
+	}
 	store := e.historyStore()
 	lister, ok := store.(interface {
 		ListRetainedSessionIDsByFilePath(context.Context, string, string) ([]string, error)
 	})
 	if !ok {
-		return nil, nil
+		return nil
 	}
 	ids, err := lister.ListRetainedSessionIDsByFilePath(ctx, path, string(agent))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	bySession := make(map[string][]db.Message, len(ids))
 	for _, id := range ids {
 		messages, err := store.GetAllMessages(ctx, id)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		bySession[id] = messages
+		index.Add(id, messages)
 	}
-	return bySession, nil
-}
-
-// relatedArchivedMessages joins the archived rows of every session except id.
-func relatedArchivedMessages(
-	bySession map[string][]db.Message, id string,
-) []db.Message {
-	var related []db.Message
-	for other, messages := range bySession {
-		if other != id {
-			related = append(related, messages...)
-		}
-	}
-	return related
+	return nil
 }
 
 // keepCodexCloudUsage copies onto prepared the token counts and plan usage
@@ -11862,10 +11862,12 @@ func (e *Engine) reconcileProviderHistoryContext(
 }
 
 // reconcileProviderHistory applies archive preservation to candidate.
-// related holds archived rows of the other sessions from the same source,
-// read before any of them was rewritten; nil reads them now when needed.
+// sourceResults indexes the saved tool outputs of the sessions from the same
+// source, read before any of them was rewritten; nil reads them now when
+// needed.
 func (e *Engine) reconcileProviderHistory(
-	ctx context.Context, candidate ingest.Candidate, related []db.Message,
+	ctx context.Context, candidate ingest.Candidate,
+	sourceResults *ingest.SourceToolResults,
 ) (ingest.HistoryResult, error) {
 	agent := candidate.Parsed.Session.Agent
 	options := ingest.ContentOptions{
@@ -11909,20 +11911,20 @@ func (e *Engine) reconcileProviderHistory(
 			}
 		}
 		if unresolved && agent == parser.AgentCodeBuddy {
-			if related == nil && candidate.Session.FilePath != nil {
-				bySession, err := e.archivedSourceMessages(
-					ctx, *candidate.Session.FilePath, agent,
-				)
-				if err != nil {
+			if sourceResults == nil && candidate.Session.FilePath != nil {
+				sourceResults = &ingest.SourceToolResults{}
+				sourceResults.Want(candidate.Parsed.Messages)
+				if err := e.loadSourceToolResults(
+					ctx, sourceResults, *candidate.Session.FilePath, agent,
+				); err != nil {
 					return ingest.HistoryResult{}, err
 				}
-				related = relatedArchivedMessages(bySession, candidate.Session.ID)
 			}
-			if len(related) > 0 {
+			if sourceResults.Found() {
 				if prior == nil {
 					prior = &ingest.PriorSession{Session: candidate.Session}
 				}
-				prior.RelatedMessages = related
+				prior.SourceToolResults = sourceResults
 			}
 		}
 	} else {
@@ -13737,7 +13739,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sourceCwdResolution:    res.sourceCwdResolution,
 			sourceCwdStored:        res.sourceCwdStored,
 			sourceCwdStoredOK:      res.sourceCwdStoredOK,
-			relatedArchive:         relatedWrites[i].relatedArchive,
+			sourceToolResults:      relatedWrites[i].sourceToolResults,
 		}
 		if i == 0 {
 			write.staged = res.staged

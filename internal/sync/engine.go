@@ -10756,6 +10756,11 @@ type pendingWrite struct {
 	verifiedMtime       int64
 	verifiedStateOK     bool
 	unresolvedForkEpoch uint64
+	// relatedArchive holds archived rows of the other sessions read from
+	// this write's CodeBuddy transcript, loaded before any of them is
+	// rewritten so a rewound branch can restore a saved tool output its
+	// conversation archived. See preloadRelatedSourceArchives.
+	relatedArchive []db.Message
 }
 
 type sessionWriteIdentityReader interface {
@@ -11264,6 +11269,11 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		outcome.failedSessions = len(batch)
 		return outcome
 	}
+	if err := e.preloadRelatedSourceArchives(ctx, batch); err != nil {
+		outcome.err = err
+		outcome.failedSessions = len(batch)
+		return outcome
+	}
 	if ctx.Err() != nil {
 		return outcome
 	}
@@ -11627,7 +11637,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
-	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
+	history, err := e.reconcileProviderHistory(ctx, candidate, pw.relatedArchive)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
@@ -11730,6 +11740,81 @@ func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 	return false
 }
 
+// preloadRelatedSourceArchives gives each CodeBuddy write whose saved tool
+// output is gone the archived rows of the other sessions from its
+// transcript. It reads them before the batch rewrites any of them: after a
+// rewind, the conversation's new copy no longer holds the call its branch
+// now shows.
+func (e *Engine) preloadRelatedSourceArchives(
+	ctx context.Context, batch []pendingWrite,
+) error {
+	var bySource map[string]map[string][]db.Message
+	for i := range batch {
+		pw := &batch[i]
+		if pw.sess.Agent != parser.AgentCodeBuddy || pw.sess.File.Path == "" ||
+			pw.relatedArchive != nil || !hasUnresolvedPersistedToolResult(pw.msgs) {
+			continue
+		}
+		path := e.effectiveSourcePath(pw.sess.File.Path)
+		bySession, ok := bySource[path]
+		if !ok {
+			var err error
+			bySession, err = e.archivedSourceMessages(ctx, path, pw.sess.Agent)
+			if err != nil {
+				return err
+			}
+			if bySource == nil {
+				bySource = make(map[string]map[string][]db.Message)
+			}
+			bySource[path] = bySession
+		}
+		pw.relatedArchive = relatedArchivedMessages(
+			bySession, applyIDPrefixToID(e.idPrefix, pw.sess.ID),
+		)
+	}
+	return nil
+}
+
+// archivedSourceMessages reads the archived rows of every session stored
+// from path, keyed by session ID.
+func (e *Engine) archivedSourceMessages(
+	ctx context.Context, path string, agent parser.AgentType,
+) (map[string][]db.Message, error) {
+	store := e.historyStore()
+	lister, ok := store.(interface {
+		ListSessionIDsByFilePath(context.Context, string, string) ([]string, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	ids, err := lister.ListSessionIDsByFilePath(ctx, path, string(agent))
+	if err != nil {
+		return nil, err
+	}
+	bySession := make(map[string][]db.Message, len(ids))
+	for _, id := range ids {
+		messages, err := store.GetAllMessages(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		bySession[id] = messages
+	}
+	return bySession, nil
+}
+
+// relatedArchivedMessages joins the archived rows of every session except id.
+func relatedArchivedMessages(
+	bySession map[string][]db.Message, id string,
+) []db.Message {
+	var related []db.Message
+	for other, messages := range bySession {
+		if other != id {
+			related = append(related, messages...)
+		}
+	}
+	return related
+}
+
 // keepCodexCloudUsage copies onto prepared the token counts and plan usage
 // its mirror file lost; see ingest.CarryCodexCloudUsage.
 func (e *Engine) keepCodexCloudUsage(
@@ -11773,6 +11858,15 @@ func (e *Engine) historyStore() db.Store {
 func (e *Engine) reconcileProviderHistoryContext(
 	ctx context.Context, candidate ingest.Candidate,
 ) (ingest.HistoryResult, error) {
+	return e.reconcileProviderHistory(ctx, candidate, nil)
+}
+
+// reconcileProviderHistory applies archive preservation to candidate.
+// related holds archived rows of the other sessions from the same source,
+// read before any of them was rewritten; nil reads them now when needed.
+func (e *Engine) reconcileProviderHistory(
+	ctx context.Context, candidate ingest.Candidate, related []db.Message,
+) (ingest.HistoryResult, error) {
 	agent := candidate.Parsed.Session.Agent
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
@@ -11793,8 +11887,8 @@ func (e *Engine) reconcileProviderHistoryContext(
 	if ingest.RestoresPersistedToolResults(
 		agent, candidate.Parsed.Session.File.Path,
 	) {
-		if (prior == nil || len(prior.Messages) == 0) &&
-			hasUnresolvedPersistedToolResult(candidate.Parsed.Messages) {
+		unresolved := hasUnresolvedPersistedToolResult(candidate.Parsed.Messages)
+		if (prior == nil || len(prior.Messages) == 0) && unresolved {
 			store := e.historyStore()
 			stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
 			if err != nil {
@@ -11812,6 +11906,23 @@ func (e *Engine) reconcileProviderHistoryContext(
 						Session: *stored, Messages: messages,
 					}
 				}
+			}
+		}
+		if unresolved && agent == parser.AgentCodeBuddy {
+			if related == nil && candidate.Session.FilePath != nil {
+				bySession, err := e.archivedSourceMessages(
+					ctx, *candidate.Session.FilePath, agent,
+				)
+				if err != nil {
+					return ingest.HistoryResult{}, err
+				}
+				related = relatedArchivedMessages(bySession, candidate.Session.ID)
+			}
+			if len(related) > 0 {
+				if prior == nil {
+					prior = &ingest.PriorSession{Session: candidate.Session}
+				}
+				prior.RelatedMessages = related
 			}
 		}
 	} else {
@@ -13586,6 +13697,14 @@ func (e *Engine) processAndWriteSessionFile(
 	for _, cause := range res.retryCauses {
 		log.Printf("sync: session needs retry: %s", cause)
 	}
+	relatedWrites := make([]pendingWrite, len(res.results))
+	for i, pr := range res.results {
+		relatedWrites[i] = pendingWrite{sess: pr.Session, msgs: pr.Messages}
+	}
+	if err := e.preloadRelatedSourceArchives(ctx, relatedWrites); err != nil {
+		markSourceIncomplete()
+		return false, sessionsChanged, err
+	}
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
@@ -13618,6 +13737,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sourceCwdResolution:    res.sourceCwdResolution,
 			sourceCwdStored:        res.sourceCwdStored,
 			sourceCwdStoredOK:      res.sourceCwdStoredOK,
+			relatedArchive:         relatedWrites[i].relatedArchive,
 		}
 		if i == 0 {
 			write.staged = res.staged

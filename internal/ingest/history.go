@@ -24,6 +24,11 @@ const (
 type PriorSession struct {
 	Session  db.Session
 	Messages []db.Message
+	// RelatedMessages are archived rows of other sessions read from the same
+	// source, such as a CodeBuddy conversation and its rewound branches.
+	// Persisted tool-result restore uses them only for an identity the
+	// session's own rows lack, and only when every related copy agrees.
+	RelatedMessages []db.Message
 	// LoadMessages optionally supplies retained rows only when a history policy
 	// needs them. It takes precedence over Messages; callers own read errors
 	// and any caching needed across reconciliation and later preservation.
@@ -199,6 +204,15 @@ func reconcileClaudePersistedToolResults(
 		return HistoryResult{}, err
 	}
 	archived := archivedToolResultEventsByIdentity(prior.Messages)
+	for key, events := range archivedToolResultEventsByIdentity(prior.RelatedMessages) {
+		if _, own := archived[key]; own || !sameToolResultContent(events) {
+			continue
+		}
+		if archived == nil {
+			archived = make(map[toolResultEventIdentity][]db.ToolResultEvent)
+		}
+		archived[key] = events[:1]
+	}
 	currentCounts := currentToolResultIdentityCounts(candidate.Messages)
 	type callPos struct{ mi, ci int }
 	var touched []callPos
@@ -352,4 +366,16 @@ func archivedToolResultEventsByIdentity(
 		}
 	}
 	return archived
+}
+
+// sameToolResultContent reports whether every event holds the same text, as
+// when rewound branches repeat a turn they share with their conversation.
+func sameToolResultContent(events []db.ToolResultEvent) bool {
+	for _, event := range events[1:] {
+		if event.Content != events[0].Content ||
+			event.ContentLength != events[0].ContentLength {
+			return false
+		}
+	}
+	return true
 }

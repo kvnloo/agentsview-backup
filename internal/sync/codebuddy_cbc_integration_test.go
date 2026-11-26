@@ -239,6 +239,75 @@ func TestSyncCodeBuddyPersistedOutputLateAndRemoved(t *testing.T) {
 	assert.Equal(t, "the full output", resultText(), "cleanup of the side file keeps the archived text")
 }
 
+// cbcToolResult returns the result text of one tool call in a stored session.
+func cbcToolResult(t *testing.T, database *db.DB, sessionID, callID string) string {
+	t.Helper()
+	msgs, err := database.GetMessages(t.Context(), sessionID, 0, 100, true)
+	require.NoError(t, err)
+	for _, m := range msgs {
+		for _, call := range m.ToolCalls {
+			if call.ToolUseID == callID {
+				return call.ResultContent
+			}
+		}
+	}
+	return ""
+}
+
+// Rewinding a turn after CodeBuddy's cleanup removed one of its saved tool
+// outputs moves the call to a new branch. The branch shows the full output
+// the main conversation archived before the rewind.
+func TestSyncCodeBuddyRewoundTurnKeepsRemovedOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sync func(*Engine, string)
+	}{
+		{"full sync", func(e *Engine, _ string) { e.SyncAll(t.Context(), nil) }},
+		{"changed path", func(e *Engine, path string) { e.SyncPaths([]string{path}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCodeBuddyRewoundTurnKeepsRemovedOutput(t, tc.sync)
+		})
+	}
+}
+
+func testCodeBuddyRewoundTurnKeepsRemovedOutput(t *testing.T, sync func(*Engine, string)) {
+	home, project := cbcSyncHome(t)
+	transcript := filepath.Join(project, "s1.jsonl")
+	side := filepath.Join(project, "s1", "tool-results", "c1.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(side), 0o755))
+	require.NoError(t, os.WriteFile(side, []byte("the full output"), 0o600))
+	turn := []string{
+		`{"id":"u1","type":"message","role":"user","timestamp":1767225600000,"content":[{"type":"input_text","text":"go"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1767225601000,"name":"Bash","callId":"c1","arguments":"{}"}`,
+		`{"id":"r1","parentId":"c1","type":"function_call_result","timestamp":1767225602000,"name":"Bash","callId":"c1","output":"<persisted-output>\nOutput too large (1KB). Full output saved to: ` + filepath.ToSlash(side) + `\n</persisted-output>"}`,
+		`{"id":"a1","parentId":"r1","type":"message","role":"assistant","timestamp":1767225603000,"content":[{"type":"output_text","text":"done"}]}`,
+	}
+	writeCBCSync(t, transcript, turn...)
+	database := openTestDB(t)
+	engine := newCBCEngine(t, database, home)
+	engine.SyncAll(t.Context(), nil)
+	require.Equal(t, "the full output", cbcToolResult(t, database, "codebuddy:s1", "c1"))
+
+	// CodeBuddy's cleanup removes the saved output, then the user rewinds
+	// the turn and sends a new prompt.
+	require.NoError(t, os.Remove(side))
+	writeCBCSync(t, transcript, append(turn,
+		`{"id":"n1","type":"resend-fork-notice","timestamp":1767225604000}`,
+		`{"id":"u2","type":"message","role":"user","timestamp":1767225605000,"content":[{"type":"input_text","text":"again"}]}`,
+		`{"id":"a2","parentId":"u2","type":"message","role":"assistant","timestamp":1767225606000,"content":[{"type":"output_text","text":"ok"}]}`,
+	)...)
+	sync(engine, transcript)
+
+	branch, err := database.GetSessionFull(t.Context(), "codebuddy:s1-u1")
+	require.NoError(t, err)
+	require.NotNil(t, branch, "the rewound turn becomes a branch")
+	assert.Equal(t, "the full output", cbcToolResult(t, database, "codebuddy:s1-u1", "c1"),
+		"the branch keeps the output the main conversation archived")
+	assert.Empty(t, cbcToolResult(t, database, "codebuddy:s1", "c1"),
+		"the main conversation no longer holds the rewound call")
+}
+
 // Deleting a conversation in CodeBuddy removes its transcript; the archive
 // keeps it, and a removed branch keeps its archived copy too.
 func TestSyncCodeBuddySourceDeletionKeepsArchive(t *testing.T) {

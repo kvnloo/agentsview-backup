@@ -64,3 +64,42 @@ func TestCodeBuddyLookupPrefersCopyWithTurns(t *testing.T) {
 		})
 	}
 }
+
+// Streaming discovery and change events name the same copy of a conversation
+// that several homes hold: the newer copy with turns. The 4.x manifest still
+// streams after the transcripts.
+func TestCodeBuddyStreamingDiscoveryYieldsPreferredCopy(t *testing.T) {
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	newerHome, newerProject := cbcHome(t)
+	olderHome, olderProject := cbcHome(t)
+	newer := filepath.Join(newerProject, "conv1.jsonl")
+	older := filepath.Join(olderProject, "conv1.jsonl")
+	writeCBC(t, newer, line)
+	writeCBC(t, older, line)
+	stale := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(older, stale, stale))
+	manifest := filepath.Join(olderHome, "history", "ws", "conv2", "index.json")
+	writeCBC(t, manifest, `{"messages":[]}`)
+
+	p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+		NewProvider(ProviderConfig{Roots: []string{olderHome, newerHome}, Machine: "m"})
+	var streamed []string
+	err := p.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error {
+		streamed = append(streamed, source.DisplayPath)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{newer, manifest}, streamed)
+
+	for _, changed := range []string{older, newer} {
+		sources, err := p.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: changed, EventKind: "write"})
+		require.NoError(t, err)
+		require.Len(t, sources, 1, changed)
+		assert.Equal(t, newer, sources[0].DisplayPath, "a change to %s refreshes the preferred copy", changed)
+	}
+	require.NoError(t, os.Remove(older))
+	sources, err := p.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: older, EventKind: "remove"})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, older, sources[0].DisplayPath, "a removed copy is still reported")
+}

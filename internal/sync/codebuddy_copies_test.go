@@ -93,3 +93,48 @@ func TestSyncCodeBuddyEqualTimeCopiesKeepOneOwner(t *testing.T) {
 		})
 	}
 }
+
+// A new conversation whose copies sit in two configured homes keeps the
+// newer copy's turns when watched-folder checks or change events reach both
+// copies before either is saved.
+func TestSyncCodeBuddyNewConversationCopiesKeepNewerTurns(t *testing.T) {
+	for _, newerFirst := range []bool{true, false} {
+		for _, run := range []struct {
+			name string
+			sync func(t *testing.T, e *Engine, newer, older string)
+		}{
+			{"change events", func(_ *testing.T, e *Engine, newer, older string) {
+				e.SyncPaths([]string{older, newer})
+			}},
+			{"change events newer first", func(_ *testing.T, e *Engine, newer, older string) {
+				e.SyncPaths([]string{newer, older})
+			}},
+			{"watched-folder check", func(t *testing.T, e *Engine, _, _ string) {
+				require.NoError(t, e.ReconcileWatchRoots(t.Context(), nil, true))
+			}},
+		} {
+			name := run.name + " newer home listed first"
+			if !newerFirst {
+				name = run.name + " older home listed first"
+			}
+			t.Run(name, func(t *testing.T) {
+				firstHome, firstProject := cbcSyncHome(t)
+				secondHome, secondProject := cbcSyncHome(t)
+				newerProject, olderProject := firstProject, secondProject
+				if !newerFirst {
+					newerProject, olderProject = secondProject, firstProject
+				}
+				newer := filepath.Join(newerProject, "conv1.jsonl")
+				older := filepath.Join(olderProject, "conv1.jsonl")
+				writeCBCSync(t, newer, cbcCopyTurns(3, "third")...)
+				writeCBCSync(t, older, cbcCopyTurns(1, "first")...)
+				stale := time.Now().Add(-time.Hour)
+				require.NoError(t, os.Chtimes(older, stale, stale))
+
+				database := openTestDB(t)
+				run.sync(t, newCBCEngine(t, database, firstHome, secondHome), newer, older)
+				assertCBCCopyOwner(t, database, newer, 3, "the newer copy owns the new conversation")
+			})
+		}
+	}
+}

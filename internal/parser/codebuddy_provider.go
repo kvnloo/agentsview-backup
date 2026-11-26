@@ -8,6 +8,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -109,8 +110,8 @@ type codebuddyProvider struct {
 // Discover returns every source it could read. When a directory is
 // unreadable it still returns the readable sources, together with the
 // DiscoveryIncompleteError, so the engine syncs them without tombstoning.
-// When several CLI/5.x transcripts hold one conversation, only the copy
-// bestCBCCopies picks is returned.
+// When several CLI/5.x transcripts hold one conversation, DiscoverEach
+// returns only the copy bestCBCCopies picks.
 func (p *codebuddyProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
@@ -118,7 +119,6 @@ func (p *codebuddyProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 		addJSONLSource(source, &sources, seen)
 		return nil
 	})
-	sources = p.bestCBCCopies(ctx, sources)
 	sortJSONLSources(sources)
 	return sources, err
 }
@@ -169,16 +169,32 @@ func (p *codebuddyProvider) bestCBCCopies(ctx context.Context, sources []SourceR
 	return kept
 }
 
-// DiscoverEach yields the CLI and IDE 5.x transcripts, then the IDE 4.x
-// manifests. An unreadable CLI directory does not stop the 4.x roots from
-// being searched; cancellation and yield failures still stop at once.
+// DiscoverEach yields the CLI and IDE 5.x transcripts, then streams the IDE
+// 4.x manifests. It lists every transcript before yielding the first, so it
+// yields one copy of each conversation, the one bestCBCCopies picks, and a
+// sync never parses two copies side by side. That keeps the transcript
+// sources in memory, not their contents. An unreadable CLI directory does not
+// stop the 4.x roots from being searched; cancellation and yield failures
+// still stop at once.
 func (p *codebuddyProvider) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
-	cbcErr := p.cbc.DiscoverEach(ctx, yield)
+	var cbc []SourceRef
+	cbcErr := p.cbc.DiscoverEach(ctx, func(source SourceRef) error {
+		cbc = append(cbc, source)
+		return nil
+	})
 	if cbcErr != nil {
 		if _, incomplete := errors.AsType[DiscoveryIncompleteError](cbcErr); !incomplete || ctx.Err() != nil {
 			return cbcErr
+		}
+	}
+	for _, source := range p.bestCBCCopies(ctx, cbc) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := yield(source); err != nil {
+			return err
 		}
 	}
 	return errors.Join(cbcErr, p.legacy.DiscoverEach(ctx, yield))
@@ -204,8 +220,11 @@ func (p *codebuddyProvider) SourcesForChangedPath(
 	ctx context.Context, req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	cbc, err := p.cbc.SourcesForChangedPath(ctx, req)
-	if err != nil || len(cbc) > 0 {
-		return cbc, err
+	if err != nil {
+		return nil, err
+	}
+	if len(cbc) > 0 {
+		return p.preferredCBCCopies(ctx, cbc)
 	}
 	legacy, err := p.legacy.SourcesForChangedPath(ctx, req)
 	if err != nil {
@@ -217,6 +236,63 @@ func (p *codebuddyProvider) SourcesForChangedPath(
 	}
 	return append(legacy, converted...), nil
 }
+
+// preferredCBCCopies replaces each changed transcript with the copy of its
+// conversation that discovery keeps when configured roots or project
+// directories hold several, such as a backup beside the live home. A change
+// event on any copy then refreshes the same copy a full sync does, and two
+// copies changed together cannot be written side by side. A transcript that
+// is gone stays as it is, so its removal is still recorded.
+func (p *codebuddyProvider) preferredCBCCopies(
+	ctx context.Context, sources []SourceRef,
+) ([]SourceRef, error) {
+	// A few changed transcripts, such as a session and its agents after a
+	// saved tool output, are looked up directly. Many, such as after a
+	// catalog write, share one listing of every transcript.
+	lookup := func(id string) (SourceRef, bool, error) {
+		return p.cbc.FindSource(ctx, FindSourceRequest{RawSessionID: id})
+	}
+	if len(sources) > codebuddyDirectCopyLookups {
+		copies := make(map[string][]SourceRef)
+		err := p.cbc.DiscoverEach(ctx, func(source SourceRef) error {
+			copies[source.ReconciliationIdentity] = append(copies[source.ReconciliationIdentity], source)
+			return nil
+		})
+		if _, incomplete := errors.AsType[DiscoveryIncompleteError](err); err != nil && (!incomplete || ctx.Err() != nil) {
+			return nil, err
+		}
+		lookup = func(id string) (SourceRef, bool, error) {
+			if len(copies[id]) == 0 {
+				return SourceRef{}, false, nil
+			}
+			return codebuddyPreferredCBCCopy(ctx, copies[id]), true, nil
+		}
+	}
+	out := make([]SourceRef, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		_, path, ok := p.cbc.pathFromSource(source)
+		if ok && source.ReconciliationIdentity != "" && IsRegularFile(path) {
+			preferred, found, err := lookup(source.ReconciliationIdentity)
+			if err != nil {
+				return nil, err
+			}
+			if found && preferred.Key != source.Key &&
+				codebuddyCBCHasConversation(ctx, preferred.DisplayPath) {
+				source = preferred
+			}
+		}
+		if _, dup := seen[source.Key]; !dup {
+			seen[source.Key] = struct{}{}
+			out = append(out, source)
+		}
+	}
+	return out, nil
+}
+
+// codebuddyDirectCopyLookups is the most changed transcripts whose preferred
+// copies are looked up one at a time instead of from one listing.
+const codebuddyDirectCopyLookups = 16
 
 // cbcReadingLegacyPath maps a path in a 4.x conversation directory to the
 // CBC transcript of the same conversation. A converted conversation reads
@@ -498,7 +574,25 @@ func (p *codebuddyProvider) ResolveReconciliationScopes(
 	if err := ValidateReconciliationScopeRoots(p.Def.Type, roots, requested); err != nil {
 		return ReconciliationScopePlan{}, err
 	}
-	return directoryReconciliationScopePlan(roots, requested), nil
+	plan := directoryReconciliationScopePlan(roots, requested)
+	if len(p.cbc.roots) > 1 {
+		// Copies of one conversation can sit under several transcript roots.
+		// A scope that walks transcripts walks every transcript root, so
+		// discovery yields one copy per conversation and the pass cannot
+		// write two copies side by side. The proof scope still limits what
+		// the pass admits and tombstones.
+		for i := range plan.Scopes {
+			scope := &plan.Scopes[i]
+			if _, walked := splitCodeBuddyRoots(scope.TraversalRoots); len(walked) > 0 {
+				for _, root := range p.cbc.roots {
+					if !slices.Contains(walked, root) {
+						scope.TraversalRoots = append(scope.TraversalRoots, root)
+					}
+				}
+			}
+		}
+	}
+	return plan, nil
 }
 
 func codeBuddyProviderCapabilities() Capabilities {

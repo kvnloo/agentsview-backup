@@ -63,21 +63,25 @@ the same day and timezone. Usage rows that recur across related sessions are
 deduplicated before totaling, following the same rule the Usage page applies.
 
 Subagents include native child sessions and eligible `claude -p`, `codex exec`,
-or Grok headless runs. Muse Personal delegated browser runs
-(`runtime.browser_input`) and subagent runs are Subagents too. A subagent run is
-plain `runtime` whose first user message opens with the full banner
-`[Subagent Context] You are running as a subagent (depth N/M)`; it links to the
-session named by its `- Requester agent id:` field and stays parentless when
-that field is missing or ambiguous. Claude Code `sdk-cli` workers qualify when
-their first real normalized prompt records `turnOrigin=sdk`, and a human origin
-wins over conflicting markers. A queued first prompt, missing or unknown origin,
-SDK library entrypoints, or an explicit provider kind blocks this inference.
-Human SDK conversations stay Interactive unless their prompts match an
-automation pattern, while known subagents keep that category even when their
-prompts match built-in or user `[automated]` patterns. Runs without a subagent
-relationship count as Automated when they carry a roborev tag, are Muse Personal
-scheduled or upkeep runs, or have a matching first prompt, and prompt matching
-requires one or fewer real user messages.
+or Grok headless runs. Muse Personal delegated runs and subagent runs are
+Subagents too. Delegated runs are `runtime.browser_input`, or plain `runtime`
+whose first user message opens with
+`Carry out this assignment end to end, then report the result.` or
+`## Task and updates`; they record no parent. A subagent run is plain `runtime`
+whose first user message has the
+`[Subagent Context] You are running as a subagent (depth N/M); ...` banner as
+its whole first line; it links to the session named by its
+`- Requester agent id:` field and stays parentless when that field is missing or
+ambiguous. Claude Code `sdk-cli` workers qualify when their first real
+normalized prompt records `turnOrigin=sdk`, and a human origin wins over
+conflicting markers. A queued first prompt, missing or unknown origin, SDK
+library entrypoints, or an explicit provider kind blocks this inference. Human
+SDK conversations stay Interactive unless their prompts match an automation
+pattern, while known subagents keep that category even when their prompts match
+built-in or user `[automated]` patterns. Runs without a subagent relationship
+count as Automated when they carry a roborev tag, are Muse Personal scheduled or
+upkeep runs, or have a matching first prompt, and prompt matching requires one
+or fewer real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and

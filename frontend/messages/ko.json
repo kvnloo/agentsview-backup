@@ -234,7 +234,7 @@
   "session_breadcrumb_failed_to_open": "열기 실패",
   "session_breadcrumb_open_in_codex_desktop": "Codex Desktop에서 열기",
   "session_breadcrumb_open_in_codebuddy_ide": "{app}에서 열기",
-  "session_breadcrumb_codebuddy_ide_no_conversation": "이 컴퓨터의 {app}에 이 대화 기록이 없습니다(예: CLI에서만 실행한 대화). 터미널에서 이어서 진행하세요.",
+  "session_breadcrumb_codebuddy_ide_no_conversation": "이 컴퓨터의 {app}에 이 대화 기록이 없습니다. 터미널에서 이어서 진행하세요.",
   "session_breadcrumb_codebuddy_ide_launch_failed": "이 대화를 열기 위해 {app}을(를) 실행하지 못했습니다.",
   "session_breadcrumb_open_in_claude_code": "Claude Code에서 열기",
   "session_breadcrumb_summary_mode": "요약 모드",

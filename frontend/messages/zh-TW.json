@@ -234,7 +234,7 @@
   "session_breadcrumb_failed_to_open": "開啟失敗",
   "session_breadcrumb_open_in_codex_desktop": "在 Codex Desktop 中開啟",
   "session_breadcrumb_open_in_codebuddy_ide": "在 {app} 中開啟",
-  "session_breadcrumb_codebuddy_ide_no_conversation": "本機的 {app} 中沒有這段對話的記錄（例如它只在 CLI 中執行過）。請在終端中繼續。",
+  "session_breadcrumb_codebuddy_ide_no_conversation": "本機的 {app} 中沒有這段對話。請在終端中繼續。",
   "session_breadcrumb_codebuddy_ide_launch_failed": "無法啟動 {app} 來開啟這段對話。",
   "session_breadcrumb_open_in_claude_code": "在 Claude Code 中開啟",
   "session_breadcrumb_summary_mode": "摘要模式",

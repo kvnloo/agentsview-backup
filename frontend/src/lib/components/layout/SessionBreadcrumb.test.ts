@@ -1075,7 +1075,7 @@ describe("SessionBreadcrumb", () => {
 
       await vi.waitFor(() => {
         expect(getFlashMessage()).toBe(
-          "CodeBuddy CN has no record of this conversation on this computer, for example because it ran only in the CLI. Continue it from a terminal.",
+          "CodeBuddy CN has no record of this conversation on this computer. Continue it in a terminal.",
         );
       });
       const button = document.querySelector<HTMLButtonElement>(".resume-btn")!;

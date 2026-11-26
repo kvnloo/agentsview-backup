@@ -10748,8 +10748,7 @@ type pendingWrite struct {
 	sourceIdentityUnverified bool
 	// sourceProjectResolved marks writes whose parser project has already
 	// been reconciled with durable identity for an unavailable local cwd.
-	sourceProjectResolved  bool
-	sourceProjectAvailable bool
+	sourceProjectResolved bool
 	// baselineEligible is set by collectAndBatch only when the complete source
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
@@ -11077,15 +11076,8 @@ func (e *Engine) preserveUnavailableSourceProjects(
 		}
 		if batch[i].sourceCwdResolution.State != parser.SourceCwdUnavailable {
 			if _, err := stat(preservationCwd); err == nil && sess.Project != "" {
-				if e.codexUnknownLabelRoots && sess.Agent == parser.AgentCodex &&
-					e.isLocalMachineAttribution(sess.Machine) &&
-					strings.Contains(filepath.ToSlash(sess.File.Path), "/.codex-run-v1-") &&
-					parser.CodexSourceLabelForRoots(e.sources().agentDirs[parser.AgentCodex], sess.File.Path) == "" {
-					batch[i].sourceProjectAvailable = true
-				} else {
-					batch[i].sourceProjectResolved = true
-					continue
-				}
+				batch[i].sourceProjectResolved = true
+				continue
 			}
 		}
 		storedID := applyIDPrefixToID(e.idPrefix, sess.ID)
@@ -11125,21 +11117,10 @@ func (e *Engine) preserveUnavailableSourceProjects(
 				) {
 				continue
 			}
-			oldLabel := parser.CodexSourceLabelForRoots(e.codexPreviousLabelRoots, sess.File.Path)
-			if e.codexUnknownLabelRoots && oldLabel == "" && sess.Agent == parser.AgentCodex &&
-				e.isLocalMachineAttribution(sess.Machine) && filepath.Base(snapshot.RootPath) != snapshot.Project &&
-				parser.CodexSourceLabelForRoots(e.sources().agentDirs[parser.AgentCodex], sess.File.Path) == "" &&
-				possibleCodexSourceLabel(sess.File.Path, snapshot.Project) {
-				oldLabel = snapshot.Project
-			}
-			if sess.Agent == parser.AgentCodex && sess.GitRemote != "" && oldLabel != "" &&
-				snapshot.Project == oldLabel && parser.CodexSourceLabelForRoots(e.sources().agentDirs[parser.AgentCodex], sess.File.Path) != oldLabel {
-				if remote, ok := export.NormalizeGitRemote(sess.GitRemote); ok {
-					sess.Project = pathpkg.Base(remote)
-					continue
-				}
-			}
-			if batch[i].sourceProjectAvailable && filepath.Base(snapshot.RootPath) != snapshot.Project {
+			if sess.Agent == parser.AgentCodex && parser.CodexObsoleteLabel(
+				e.sources().agentDirs[parser.AgentCodex], e.codexPreviousLabelRoots,
+				e.codexUnknownLabelRoots, sess.File.Path, snapshot.Project, snapshot.RootPath,
+			) {
 				continue
 			}
 			sess.Project = snapshot.Project
@@ -12305,7 +12286,9 @@ func (e *Engine) upsertSessionPendingContentForWrite(ctx context.Context,
 	if !ok {
 		return e.db.UpsertSessionPendingContent(ctx, s)
 	}
-	return e.db.UpsertSessionPendingContentWithProjectIdentity(ctx, s, obs, pw.sess.Project)
+	return e.db.UpsertSessionPendingContentWithProjectIdentity(ctx,
+		s, obs, pw.sess.Project,
+	)
 }
 
 func shouldReplaceFullParseMessages(

@@ -912,6 +912,39 @@ func CodexSourceLabelForRoots(roots []string, path string) string {
 	return label
 }
 
+// CodexMarkedRunSession reports whether path is inside a marked Codex run.
+func CodexMarkedRunSession(path string) bool {
+	for root := filepath.Dir(path); ; root = filepath.Dir(root) {
+		if CodexSourceLabel(root, path) != "" {
+			return true
+		}
+		if filepath.Dir(root) == root {
+			return false
+		}
+	}
+}
+
+// CodexObsoleteLabel identifies a saved project that came from an old run label.
+func CodexObsoleteLabel(current, previous []string, previousUnknown bool, path, project, rootPath string) bool {
+	if project == "" || CodexSourceLabelForRoots(current, path) == project {
+		return false
+	}
+	if !previousUnknown {
+		return CodexSourceLabelForRoots(previous, path) == project
+	}
+	if filepath.Base(rootPath) == project {
+		return false
+	}
+	for root := filepath.Dir(path); ; root = filepath.Dir(root) {
+		if CodexSourceLabel(root, path) == project {
+			return true
+		}
+		if filepath.Dir(root) == root {
+			return false
+		}
+	}
+}
+
 // CodexSourceLabelRoot returns the outermost matching root and its label.
 func CodexSourceLabelRoot(roots []string, path string) (string, string) {
 	var selected, label string

@@ -11,6 +11,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCodexObsoleteLabel(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+	source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")
+	ordinary := filepath.Join(root, "sessions", "2026", "10", "08", filepath.Base(source))
+	assert.True(t, CodexMarkedRunSession(source))
+	assert.False(t, CodexMarkedRunSession(ordinary))
+	for _, tc := range []struct {
+		name              string
+		current, previous []string
+		unknown           bool
+		project, rootPath string
+		want              bool
+	}{
+		{"known narrowing", []string{sessions}, []string{root}, false, "team", filepath.Join(root, "checkout"), true},
+		{"unchanged label", []string{root}, []string{root}, false, "team", filepath.Join(root, "checkout"), false},
+		{"unknown narrowing", []string{sessions}, nil, true, "team", filepath.Join(root, "checkout"), true},
+		{"saved root confirms project", []string{sessions}, nil, true, "team", filepath.Join(root, "team"), false},
+		{"different project", []string{sessions}, []string{root}, false, "checkout", filepath.Join(root, "checkout"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.previous, tc.unknown, source, tc.project, tc.rootPath))
+		})
+	}
+}
+
 // setupFileSystem creates a temporary directory and populates
 // it with the given relative file paths and contents.
 func setupFileSystem(t *testing.T, dir string, files map[string]string) {

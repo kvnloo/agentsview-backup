@@ -14,17 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func possibleCodexSourceLabel(path, label string) bool {
-	for root := filepath.Dir(path); ; root = filepath.Dir(root) {
-		if parser.CodexSourceLabel(root, path) == label {
-			return true
-		}
-		if filepath.Dir(root) == root {
-			return false
-		}
-	}
-}
-
 // refreshCodexLabelRoots marks changed labels for retry and returns roots to record.
 func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 	if e.ephemeral || slices.Contains(e.sources().preserveAgents, parser.AgentCodex) {
@@ -48,28 +37,28 @@ func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 		e.codexPreviousLabelRoots = previous
 		e.codexUnknownLabelRoots = unknown
 	}
-	if err := staleCodexLabelsInDB(ctx, e.db, previous, roots, nil, unknown, e.machine); err != nil {
+	if err := staleCodexLabelsInDB(ctx, e.db, previous, roots, unknown, e.machine); err != nil {
 		return "", err
 	}
 	return string(signature), nil
 }
 
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
-func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, current []string, only map[string]bool, unknown bool, machine string) error {
+func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, current []string, unknown bool, machine string) error {
 	records, err := database.ListSessionPathRecordsForAgents(ctx, []string{string(parser.AgentCodex)})
 	if err != nil {
 		return err
 	}
 	var ids []string
 	for _, record := range records {
-		if only != nil && !only[record.ID] {
-			continue
-		}
 		label := parser.CodexSourceLabelForRoots(current, record.FilePath)
 		if label == parser.CodexSourceLabelForRoots(previous, record.FilePath) && !unknown {
 			continue
 		}
 		if unknown {
+			if !parser.CodexMarkedRunSession(record.FilePath) {
+				continue
+			}
 			inScope := false
 			for _, root := range current {
 				rel, err := filepath.Rel(root, record.FilePath)
@@ -97,36 +86,6 @@ func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, curren
 		})
 	}
 	return database.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0))
-}
-
-// restoreCodexLabelRoots preserves the old roots when Codex was disabled and
-// marks restored sessions whose labels changed for their next reparse.
-func restoreCodexLabelRoots(ctx context.Context, oldDB, newDB *db.DB, restored []string, machine string) error {
-	previous, err := oldDB.GetSyncState(ctx, codexLabelRootsKey)
-	if err != nil {
-		return err
-	}
-	current, err := newDB.GetSyncState(ctx, codexLabelRootsKey)
-	if err != nil {
-		return err
-	}
-	if current == "" {
-		if previous != "" {
-			return newDB.SetSyncState(ctx, codexLabelRootsKey, previous)
-		}
-		return nil
-	}
-	if current == previous || len(restored) == 0 {
-		return nil
-	}
-	var oldRoots, newRoots []string
-	unknown := json.Unmarshal([]byte(previous), &oldRoots) != nil
-	_ = json.Unmarshal([]byte(current), &newRoots)
-	only := make(map[string]bool, len(restored))
-	for _, id := range restored {
-		only[id] = true
-	}
-	return staleCodexLabelsInDB(ctx, newDB, oldRoots, newRoots, only, unknown, machine)
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

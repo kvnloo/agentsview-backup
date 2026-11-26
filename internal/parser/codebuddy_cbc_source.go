@@ -213,11 +213,14 @@ func (s codebuddyCBCSourceSet) SourcesForChangedPath(
 			}
 			return nil, nil
 		}
-		if owner, ok := codebuddyCBCToolResultOwner(root, path); ok {
-			if IsRegularFile(owner) {
-				return []SourceRef{s.sourceRef(root, owner)}, nil
+		if readers, ok := codebuddyCBCToolResultReaders(root, path); ok {
+			var out []SourceRef
+			for _, reader := range readers {
+				if IsRegularFile(reader) {
+					out = append(out, s.sourceRef(root, reader))
+				}
 			}
-			return nil, nil
+			return out, nil
 		}
 		if catalog := codebuddyCatalogPathForProjects(root); catalog != "" &&
 			strings.TrimSuffix(path, "-wal") == catalog {
@@ -253,21 +256,31 @@ func (s codebuddyCBCSourceSet) sourcesForCatalogChange(
 	return out, nil
 }
 
-// codebuddyCBCToolResultOwner maps a file under a session's tool-results
-// directory to the transcript that persisted it.
-func codebuddyCBCToolResultOwner(root, path string) (string, bool) {
+// codebuddyCBCToolResultReaders maps a file under a tool-results directory
+// to the transcripts that read it. An agent reads its own directory and its
+// parent session's, so a parent output refreshes the parent and every agent
+// transcript of that session.
+func codebuddyCBCToolResultReaders(root, path string) ([]string, bool) {
 	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch {
 	case len(parts) == 4 && parts[2] == "tool-results":
-		return filepath.Join(root, parts[0], parts[1]+".jsonl"), true
+		readers := []string{filepath.Join(root, parts[0], parts[1]+".jsonl")}
+		subagents := filepath.Join(root, parts[0], parts[1], "subagents")
+		entries, _ := os.ReadDir(subagents)
+		for _, entry := range entries {
+			if agent := filepath.Join(subagents, entry.Name()); codebuddyCBCSourcePath(root, agent) {
+				readers = append(readers, agent)
+			}
+		}
+		return readers, true
 	case len(parts) == 6 && parts[2] == "subagents" && parts[4] == "tool-results":
-		return filepath.Join(root, parts[0], parts[1], "subagents", parts[3]+".jsonl"), true
+		return []string{filepath.Join(root, parts[0], parts[1], "subagents", parts[3]+".jsonl")}, true
 	}
-	return "", false
+	return nil, false
 }
 
 func (s codebuddyCBCSourceSet) FindSource(
@@ -387,28 +400,42 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 	}, nil
 }
 
-// codebuddyCBCSidecarFiles lists the persisted tool outputs a transcript
-// owns, sorted for a stable fingerprint.
+// codebuddyCBCSidecarFiles lists the persisted tool outputs a transcript can
+// read, sorted for a stable fingerprint. An agent transcript also reads its
+// parent session's outputs.
 func codebuddyCBCSidecarFiles(ctx context.Context, path string) ([]string, error) {
-	dir := filepath.Join(filepath.Dir(path), strings.TrimSuffix(filepath.Base(path), ".jsonl"), "tool-results")
 	var files []string
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+	for _, dir := range codebuddyCBCToolResultDirs(path) {
+		err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if err != nil {
+				return err
+			}
+			if d.Type().IsRegular() {
+				files = append(files, p)
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
-		if err != nil {
-			return err
-		}
-		if d.Type().IsRegular() {
-			files = append(files, p)
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
 	}
 	slices.Sort(files)
-	return files, nil
+	return slices.Compact(files), nil
+}
+
+// codebuddyCBCToolResultDirs lists the tool-results directories the
+// persisted-output reader accepts for a transcript, without duplicates.
+func codebuddyCBCToolResultDirs(path string) []string {
+	var dirs []string
+	for _, dir := range claudeToolResultDirs(path) {
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
 }
 
 func (s codebuddyCBCSourceSet) Parse(

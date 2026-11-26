@@ -669,6 +669,60 @@ func TestCodeBuddyCBCStatHashFollowsSavedToolOutputs(t *testing.T) {
 		"an edited saved output invalidates the stat hash")
 }
 
+// An agent transcript reads saved outputs from its parent's tool-results
+// directory too, so a parent output that appears or changes refreshes it.
+func TestCodeBuddyCBCSubagentFollowsParentToolOutputs(t *testing.T) {
+	_, project := cbcHome(t)
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	parent := filepath.Join(project, "run-1.jsonl")
+	child := filepath.Join(project, "run-1", "subagents", "agent-a.jsonl")
+	writeCBC(t, parent, line)
+	writeCBC(t, child, line)
+	// An unrelated file under subagents is not a transcript.
+	writeCBC(t, filepath.Join(project, "run-1", "subagents", "notes.jsonl"), line)
+	set := newCodeBuddyCBCSourceSet([]string{filepath.Dir(project)}, "")
+	source := set.sourceRef(filepath.Dir(project), child)
+	fingerprint := func() string {
+		t.Helper()
+		got, err := set.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		return got.Hash
+	}
+	probe, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	beforeHash, beforeStat := fingerprint(), probe.ComputeMultiFileStatHash(child)
+	require.NotZero(t, beforeStat)
+
+	output := filepath.Join(project, "run-1", "tool-results", "call-1.txt")
+	writeCBC(t, output, "parent output")
+	afterHash, afterStat := fingerprint(), probe.ComputeMultiFileStatHash(child)
+	assert.NotEqual(t, beforeHash, afterHash, "a new parent output changes the agent fingerprint")
+	assert.NotEqual(t, beforeStat, afterStat, "a new parent output changes the agent stat hash")
+
+	f, err := os.OpenFile(output, os.O_WRONLY|os.O_TRUNC, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("a longer parent output")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.NotEqual(t, afterHash, fingerprint(), "an edited parent output changes the agent fingerprint")
+	assert.NotEqual(t, afterStat, probe.ComputeMultiFileStatHash(child), "an edited parent output changes the agent stat hash")
+
+	changed, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: output})
+	require.NoError(t, err)
+	var paths []string
+	for _, source := range changed {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.ElementsMatch(t, []string{parent, child}, paths, "a parent output refreshes the parent and its agents")
+
+	own := filepath.Join(project, "run-1", "subagents", "agent-a", "tool-results", "call-2.txt")
+	writeCBC(t, own, "agent output")
+	changed, err = set.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: own})
+	require.NoError(t, err)
+	require.Len(t, changed, 1, "an agent's own output refreshes only that agent")
+	assert.Equal(t, child, changed[0].DisplayPath)
+}
+
 func TestCodeBuddyDiscoveryKeepsReadableSourcesPastUnreadableCLIDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not block reads on Windows")

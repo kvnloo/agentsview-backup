@@ -917,10 +917,7 @@ func CodexObsoleteLabel(current []string, path, project, checkoutRoot, repositor
 	if project == "" || CodexSourceLabelForRoots(current, path) == project {
 		return false
 	}
-	if checkoutRoot != "" && NormalizeName(filepath.Base(checkoutRoot)) == project {
-		return false
-	}
-	if repositoryPath != "" && NormalizeName(filepath.Base(repositoryPath)) == project {
+	if checkoutRoot != "" && NormalizeName(filepath.Base(checkoutRoot)) == project || repositoryPath != "" && NormalizeName(filepath.Base(repositoryPath)) == project {
 		return false
 	}
 	return CodexProjectIsSourceLabel(path, project)

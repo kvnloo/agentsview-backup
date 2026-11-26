@@ -11782,12 +11782,12 @@ func (e *Engine) archivedSourceMessages(
 ) (map[string][]db.Message, error) {
 	store := e.historyStore()
 	lister, ok := store.(interface {
-		ListSessionIDsByFilePath(context.Context, string, string) ([]string, error)
+		ListRetainedSessionIDsByFilePath(context.Context, string, string) ([]string, error)
 	})
 	if !ok {
 		return nil, nil
 	}
-	ids, err := lister.ListSessionIDsByFilePath(ctx, path, string(agent))
+	ids, err := lister.ListRetainedSessionIDsByFilePath(ctx, path, string(agent))
 	if err != nil {
 		return nil, err
 	}

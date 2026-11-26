@@ -29,6 +29,7 @@ const (
 	lastPushSourceArchiveIDKey             = "pg_source_archive_id_v1"
 	lastPushTargetFingerprintKey           = "pg_target_fingerprint_v1"
 	externalParentBackfillStateKey         = "pg_external_parent_backfill_v1"
+	relationshipProvenanceBackfillStateKey = "pg_relationship_provenance_backfill_v1"
 	sessionAliasBackfillStateKey           = "pg_session_alias_backfill_v1"
 	legacyProjectIdentityStateKey          = "project_identity_publication_revision_v2"
 	projectIdentityPublicationStateKey     = "project_identity_publication_revision_v3"
@@ -337,6 +338,14 @@ func (s *Sync) pushWithOptions(
 	if externalParentBackfillNeeded {
 		noteFull("backfilling external parents")
 	}
+	var relationshipProvenanceBackfillNeeded bool
+	full, relationshipProvenanceBackfillNeeded, err = applyBackfillRequirement(ctx, state, relationshipProvenanceBackfillStateKey, full)
+	if err != nil {
+		return result, err
+	}
+	if relationshipProvenanceBackfillNeeded {
+		noteFull("backfilling session relationship provenance")
+	}
 	var transcriptRevisionBackfillNeeded bool
 	full, transcriptRevisionBackfillNeeded, err = applyBackfillRequirement(ctx, state, transcriptRevisionBackfillStateKey, full)
 	if err != nil {
@@ -378,6 +387,7 @@ func (s *Sync) pushWithOptions(
 	var backfills []string
 	for key, needed := range map[string]bool{
 		externalParentBackfillStateKey:         externalParentBackfillNeeded,
+		relationshipProvenanceBackfillStateKey: relationshipProvenanceBackfillNeeded,
 		sessionAliasBackfillStateKey:           aliasBackfillNeeded,
 		sessionProvenanceBackfillStateKey:      provenanceBackfillNeeded,
 		transcriptRevisionBackfillStateKey:     transcriptRevisionBackfillNeeded,
@@ -738,6 +748,9 @@ func (s *Sync) pushWithOptions(
 		if err := completeBackfill(ctx, state, externalParentBackfillStateKey, externalParentBackfillNeeded, result); err != nil {
 			return result, err
 		}
+		if err := completeBackfill(ctx, state, relationshipProvenanceBackfillStateKey, relationshipProvenanceBackfillNeeded, result); err != nil {
+			return result, err
+		}
 		if err := completeBackfill(ctx, state, commitLinksBackfillStateKey, commitLinksBackfillNeeded, result); err != nil {
 			return result, err
 		}
@@ -881,6 +894,9 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 	if err := completeBackfill(ctx, state, externalParentBackfillStateKey, externalParentBackfillNeeded, result); err != nil {
+		return result, err
+	}
+	if err := completeBackfill(ctx, state, relationshipProvenanceBackfillStateKey, relationshipProvenanceBackfillNeeded, result); err != nil {
 		return result, err
 	}
 	if err := completeBackfill(ctx, state, commitLinksBackfillStateKey, commitLinksBackfillNeeded, result); err != nil {
@@ -2577,6 +2593,9 @@ func sessionPushFingerprint(
 		stringValue(sess.ParentSessionID),
 		stringValue(sess.ParserParentSessionID),
 		sess.RelationshipType,
+		db.PersistedParserRelationship(sess),
+		strconv.FormatBool(db.SessionRelationshipInferred(sess)),
+		strconv.FormatBool(sess.SpawnLinked()),
 		stringValue(sess.FilePath),
 		stringValue(sess.FileHash),
 		sess.CreatedAt,
@@ -2746,6 +2765,10 @@ type pgSessionWriteOptions struct {
 // writePGSession is the shared transaction-owned row kernel. Mirror ownership
 // is passed explicitly; it never reads the source archive or global pool.
 func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID string, legacyMarkerMachines []string, options pgSessionWriteOptions) error {
+	// Read provenance before normalization replaces RelationshipType, which
+	// the fallback for sessions without stored provenance derives it from.
+	parserRelationship := db.PersistedParserRelationship(sess)
+	relationshipInferred := db.SessionRelationshipInferred(sess)
 	sess.RelationshipType = db.SessionRelationship(sess)
 	createdAt, ok := ParseSQLiteTimestamp(sess.CreatedAt)
 	if !ok {
@@ -2851,6 +2874,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			trash_includes_codex_pages, source_trash_includes_codex_pages,
 			pr_links, labels,
 			friction_count, friction_rules_version, friction_hash,
+			parser_relationship_type, relationship_inferred, spawn_linked,
 			updated_at
 			)
 			SELECT
@@ -2870,7 +2894,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, $71, $72, $72, $73, $74::text[], $75, $76, $77, NOW()
+				$70, $71, $72, $72, $73, $74::text[], $75, $76, $77,
+				$79, $80, $81, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_session
 			)
@@ -2948,6 +2973,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			parser_parent_session_id = EXCLUDED.parser_parent_session_id,
 			external_parent_session_id = EXCLUDED.external_parent_session_id,
 			relationship_type = EXCLUDED.relationship_type,
+			parser_relationship_type = EXCLUDED.parser_relationship_type,
+			relationship_inferred = EXCLUDED.relationship_inferred,
+			spawn_linked = EXCLUDED.spawn_linked,
 			tool_failure_signal_count = EXCLUDED.tool_failure_signal_count,
 			tool_retry_count = EXCLUDED.tool_retry_count,
 			edit_churn_count = EXCLUDED.edit_churn_count,
@@ -3044,6 +3072,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.parser_parent_session_id IS DISTINCT FROM EXCLUDED.parser_parent_session_id
 			OR sessions.external_parent_session_id IS DISTINCT FROM EXCLUDED.external_parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type
+			OR sessions.parser_relationship_type IS DISTINCT FROM EXCLUDED.parser_relationship_type
+			OR sessions.relationship_inferred IS DISTINCT FROM EXCLUDED.relationship_inferred
+			OR sessions.spawn_linked IS DISTINCT FROM EXCLUDED.spawn_linked
 			OR sessions.tool_failure_signal_count IS DISTINCT FROM EXCLUDED.tool_failure_signal_count
 			OR sessions.tool_retry_count IS DISTINCT FROM EXCLUDED.tool_retry_count
 			OR sessions.edit_churn_count IS DISTINCT FROM EXCLUDED.edit_churn_count
@@ -3130,6 +3161,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		db.LabelsArg(sess.Labels),
 		sess.FrictionCount, sess.FrictionRulesVersion, sess.FrictionHash,
 		sanitizePG(options.ExternalParent),
+		parserRelationship, relationshipInferred, sess.SpawnLinked(),
 	)
 	if err != nil {
 		return err

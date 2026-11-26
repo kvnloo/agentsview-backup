@@ -14,6 +14,17 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func possibleCodexSourceLabel(path, label string) bool {
+	for root := filepath.Dir(path); ; root = filepath.Dir(root) {
+		if parser.CodexSourceLabel(root, path) == label {
+			return true
+		}
+		if filepath.Dir(root) == root {
+			return false
+		}
+	}
+}
+
 // refreshCodexLabelRoots marks changed labels for retry and returns roots to record.
 func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 	if e.ephemeral || slices.Contains(e.sources().preserveAgents, parser.AgentCodex) {
@@ -32,21 +43,19 @@ func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	var previous []string
-	if json.Unmarshal([]byte(stored), &previous) != nil {
-		previous = nil
+	unknown := json.Unmarshal([]byte(stored), &previous) != nil
+	if e.archiveStore == nil {
+		e.codexPreviousLabelRoots = previous
+		e.codexUnknownLabelRoots = unknown
 	}
-	if err := e.staleCodexLabels(ctx, previous, roots); err != nil {
+	if err := staleCodexLabelsInDB(ctx, e.db, previous, roots, nil, unknown, e.machine); err != nil {
 		return "", err
 	}
 	return string(signature), nil
 }
 
 // staleCodexLabels keeps affected sources eligible until their reparse succeeds.
-func (e *Engine) staleCodexLabels(ctx context.Context, previous, current []string) error {
-	return staleCodexLabelsInDB(ctx, e.db, previous, current, nil)
-}
-
-func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, current []string, only map[string]bool) error {
+func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, current []string, only map[string]bool, unknown bool, machine string) error {
 	records, err := database.ListSessionPathRecordsForAgents(ctx, []string{string(parser.AgentCodex)})
 	if err != nil {
 		return err
@@ -57,19 +66,42 @@ func staleCodexLabelsInDB(ctx context.Context, database *db.DB, previous, curren
 			continue
 		}
 		label := parser.CodexSourceLabelForRoots(current, record.FilePath)
-		if label == parser.CodexSourceLabelForRoots(previous, record.FilePath) {
+		if label == parser.CodexSourceLabelForRoots(previous, record.FilePath) && !unknown {
 			continue
+		}
+		if unknown {
+			inScope := false
+			for _, root := range current {
+				rel, err := filepath.Rel(root, record.FilePath)
+				if err == nil && filepath.IsLocal(rel) {
+					inScope = true
+					break
+				}
+			}
+			if !inScope {
+				continue
+			}
 		}
 		if database.GetSessionDataVersion(ctx, record.ID) >= db.CurrentDataVersion() {
 			ids = append(ids, record.ID)
 		}
+	}
+	if unknown {
+		machines, err := database.ListSessionMachinesByID(ctx, ids)
+		if err != nil {
+			return err
+		}
+		ids = slices.DeleteFunc(ids, func(id string) bool {
+			m, ok := machines[id]
+			return !ok || (m != "" && m != "local" && m != machine)
+		})
 	}
 	return database.SetExistingSessionDataVersions(ctx, ids, max(db.CurrentDataVersion()-1, 0))
 }
 
 // restoreCodexLabelRoots preserves the old roots when Codex was disabled and
 // marks restored sessions whose labels changed for their next reparse.
-func restoreCodexLabelRoots(ctx context.Context, oldDB, newDB *db.DB, restored []string) error {
+func restoreCodexLabelRoots(ctx context.Context, oldDB, newDB *db.DB, restored []string, machine string) error {
 	previous, err := oldDB.GetSyncState(ctx, codexLabelRootsKey)
 	if err != nil {
 		return err
@@ -88,13 +120,13 @@ func restoreCodexLabelRoots(ctx context.Context, oldDB, newDB *db.DB, restored [
 		return nil
 	}
 	var oldRoots, newRoots []string
-	_ = json.Unmarshal([]byte(previous), &oldRoots)
+	unknown := json.Unmarshal([]byte(previous), &oldRoots) != nil
 	_ = json.Unmarshal([]byte(current), &newRoots)
 	only := make(map[string]bool, len(restored))
 	for _, id := range restored {
 		only[id] = true
 	}
-	return staleCodexLabelsInDB(ctx, newDB, oldRoots, newRoots, only)
+	return staleCodexLabelsInDB(ctx, newDB, oldRoots, newRoots, only, unknown, machine)
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in

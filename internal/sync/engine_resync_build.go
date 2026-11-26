@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -64,6 +65,14 @@ func (e *Engine) resyncBuildLocked(
 	e.clearVerifiedSources()
 
 	origDB := e.db
+	storedCodexRoots, err := origDB.GetSyncState(ctx, codexLabelRootsKey)
+	if err != nil {
+		return SyncStats{Aborted: true}, err
+	}
+	var previousCodexRoots []string
+	_ = json.Unmarshal([]byte(storedCodexRoots), &previousCodexRoots)
+	e.codexPreviousLabelRoots = previousCodexRoots
+	defer func() { e.codexPreviousLabelRoots = nil }()
 	origPath := origDB.Path()
 	tempPath := origPath + resyncTempSuffix
 	reportResyncPhase(
@@ -410,6 +419,15 @@ func (e *Engine) resyncBuildLocked(
 		}
 		return stats, nil
 	}
+	codexSourceGit, err := newDB.CodexSourceGitSessions(ctx)
+	if err != nil {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, "resync: list Codex source identities: "+err.Error())
+		return stats, err
+	}
 
 	for contributorIndex, contributor := range opts.Contributors {
 		if contributor.Started != nil {
@@ -737,7 +755,7 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	if err := restoreCodexLabelRoots(ctx, origDB, newDB, orphaned); err != nil {
+	if err := restoreCodexLabelRoots(ctx, origDB, newDB, orphaned, e.machine); err != nil {
 		return abortPreserved(fmt.Errorf("restore Codex label roots: %w", err))
 	}
 	var demoteIDs []string
@@ -882,7 +900,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
-		ctx, e.sources().agentDirs[parser.AgentCodex],
+		ctx, e.sources().agentDirs[parser.AgentCodex], previousCodexRoots, codexSourceGit,
 	); err != nil {
 		log.Printf("resync: restore session project identity: %v", err)
 		stats.Aborted = true

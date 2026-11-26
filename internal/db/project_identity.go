@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -976,7 +977,7 @@ func writeSessionProjectIdentitySnapshotExec(
 // mappings, so a missing checkout cannot replace resolved historical identity
 // with a basename fallback. It keeps freshly parsed Codex source labels intact.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
-	ctx context.Context, codexRoots []string,
+	ctx context.Context, codexRoots, previousCodexRoots []string, codexSourceGit map[string]string,
 ) (int, error) {
 	if err := db.requireWritable(); err != nil {
 		return 0, err
@@ -999,6 +1000,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		sessionID       string
 		previousProject string
 		currentProject  string
+		snapshotProject string
 		agent           string
 		sourcePath      string
 	}
@@ -1050,6 +1052,16 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 
 	kept := restores[:0]
 	for _, restore := range restores {
+		if restore.agent == string(parser.AgentCodex) && codexSourceGit[restore.sessionID] != "" {
+			oldLabel := parser.CodexSourceLabelForRoots(previousCodexRoots, restore.sourcePath)
+			if oldLabel != "" && restore.currentProject == oldLabel && parser.CodexSourceLabelForRoots(codexRoots, restore.sourcePath) != oldLabel {
+				restore.snapshotProject = restore.currentProject
+				restore.currentProject = codexSourceGit[restore.sessionID]
+				if _, err := tx.ExecContext(ctx, `UPDATE session_project_identity_snapshots SET project = ? WHERE session_id = ?`, restore.currentProject, restore.sessionID); err != nil {
+					return 0, fmt.Errorf("correcting Codex source label snapshot: %w", err)
+				}
+			}
+		}
 		if restore.agent == string(parser.AgentCodex) && restore.previousProject != "" &&
 			parser.CodexSourceLabelForRoots(codexRoots, restore.sourcePath) == restore.previousProject {
 			continue
@@ -1067,7 +1079,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	for _, restore := range kept {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
 			ctx, tx, restore.sessionID,
-			[]string{restore.previousProject, restore.currentProject},
+			[]string{restore.previousProject, restore.currentProject, restore.snapshotProject},
 		); err != nil {
 			return 0, err
 		}
@@ -1081,6 +1093,29 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		)
 	}
 	return len(kept), nil
+}
+
+// CodexSourceGitSessions identifies fresh parses with source-recorded Git identity.
+func (db *DB) CodexSourceGitSessions(ctx context.Context) (map[string]string, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT s.id, snap.recorded_git_remote FROM sessions s
+		JOIN session_project_identity_snapshots snap ON snap.session_id = s.id
+		WHERE s.agent = 'codex' AND snap.recorded_git_remote != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make(map[string]string)
+	for rows.Next() {
+		var id, remote string
+		if err := rows.Scan(&id, &remote); err != nil {
+			return nil, err
+		}
+		if normalized, ok := export.NormalizeGitRemote(remote); ok {
+			ids[id] = path.Base(normalized)
+		}
+	}
+	return ids, rows.Err()
 }
 
 // reconcileSessionProjectIdentityAggregatesTx republishes only the immutable

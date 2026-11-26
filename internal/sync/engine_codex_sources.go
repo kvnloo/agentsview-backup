@@ -32,7 +32,7 @@ func (e *Engine) refreshCodexLabelRoots(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	var previous []string
-	unknown := json.Unmarshal([]byte(stored), &previous) != nil
+	unknown := json.Unmarshal([]byte(stored), &previous) != nil || previous == nil
 	if err := staleCodexLabelsInDB(ctx, e.db, previous, roots, unknown, e.machine); err != nil {
 		return "", err
 	}

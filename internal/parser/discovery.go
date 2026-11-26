@@ -932,14 +932,28 @@ func CodexObsoleteLabel(current []string, path, project, rootPath string) bool {
 	if NormalizeName(filepath.Base(rootPath)) == project {
 		return false
 	}
-	for root := filepath.Dir(path); ; root = filepath.Dir(root) {
-		if CodexSourceLabel(root, path) == project {
-			return true
-		}
-		if filepath.Dir(root) == root {
+	return CodexProjectIsSourceLabel(path, project)
+}
+
+// CodexProjectIsSourceLabel reports whether project is a label for path.
+func CodexProjectIsSourceLabel(sourcePath, project string) bool {
+	if project == "" {
+		return false
+	}
+	sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
+	marker := strings.LastIndex(sourcePath, "/.codex-run-v1-")
+	if marker < 0 {
+		return false
+	}
+	root := sourcePath[:marker]
+	if project != "." {
+		suffix := "/" + project
+		if !strings.HasSuffix(root, suffix) {
 			return false
 		}
+		root = strings.TrimSuffix(root, suffix) + "/"
 	}
+	return CodexSourceLabel(filepath.FromSlash(root), filepath.FromSlash(sourcePath)) == project
 }
 
 // CodexSourceLabelRoot returns the outermost matching root and its label.

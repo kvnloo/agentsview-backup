@@ -42,6 +42,24 @@ func TestCodexObsoleteLabel(t *testing.T) {
 	}
 }
 
+func TestCodexProjectIsSourceLabel(t *testing.T) {
+	for _, tc := range []struct {
+		path, project string
+		want          bool
+	}{
+		{"/logs/team/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "team", true},
+		{"/logs/team/sub/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "team/sub", true},
+		{"/logs/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", ".", true},
+		{`C:\logs\team\.codex-run-v1-abc\sessions\2026\10\08\rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl`, "team", true},
+		{"/logs/team/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "other", false},
+		{"/logs/team/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "team", false},
+	} {
+		t.Run(tc.path+"/"+tc.project, func(t *testing.T) {
+			assert.Equal(t, tc.want, CodexProjectIsSourceLabel(tc.path, tc.project))
+		})
+	}
+}
+
 // setupFileSystem creates a temporary directory and populates
 // it with the given relative file paths and contents.
 func setupFileSystem(t *testing.T, dir string, files map[string]string) {

@@ -167,6 +167,27 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		assert.NotEqual(t, parser.SessionKindRoborev, session.SessionKind)
 		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 	})
+	t.Run("null signature with narrowed root", func(t *testing.T) {
+		f := setup(t, true)
+		expected, _ := neverLabeledProject(t, f)
+		otherID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+		source := filepath.Join(f.sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+otherID+".jsonl")
+		meta := testjsonl.CodexSessionMetaWithFieldsJSON(otherID, filepath.Join(f.parent, "missing-checkout"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+		dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+		require.Equal(t, 1, f.engine.SyncAll(t.Context(), nil).Synced)
+		require.NoError(t, f.database.SetSyncState(t.Context(), codexLabelRootsKey, "null"))
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.sessions}}})
+		stats := f.engine.SyncAll(t.Context(), nil)
+		require.Zero(t, stats.Failed)
+		assert.Equal(t, 2, stats.Synced)
+		for _, sessionID := range []string{id, otherID} {
+			session, err := f.database.GetSessionFull(t.Context(), "codex:"+sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, expected, session.Project)
+		}
+		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
+	})
 	t.Run("unknown signature leaves ordinary sources current", func(t *testing.T) {
 		f := setup(t, true)
 		other := filepath.Join(f.parent, "ordinary")

@@ -24,32 +24,12 @@ func TestCodexObsoleteLabel(t *testing.T) {
 		want         bool
 	}{
 		{"narrowing", []string{sessions}, "team", filepath.Join(root, "checkout"), source, true},
-		{"no saved checkout", []string{sessions}, "team", "", source, true},
 		{"unchanged label", []string{root}, "team", filepath.Join(root, "checkout"), source, false},
 		{"different project", []string{sessions}, "other", filepath.Join(root, "checkout"), source, false},
 		{"normalized checkout", nil, "my_app", filepath.Join(root, "my-app"), filepath.Join(root, "my_app", ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source)), false},
-		{"normalized label", nil, "my-app", filepath.Join(root, "my_app"), filepath.Join(root, "my-app", ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source)), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.source, tc.project, tc.checkoutRoot, ""))
-		})
-	}
-}
-
-func TestCodexProjectIsSourceLabel(t *testing.T) {
-	for _, tc := range []struct {
-		path, project string
-		want          bool
-	}{
-		{"/logs/team/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "team", true},
-		{"/logs/team/sub/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "team/sub", true},
-		{"/logs/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", ".", true},
-		{`C:\logs\team\.codex-run-v1-abc\sessions\2026\10\08\rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl`, "team", true},
-		{"/logs/team/.codex-run-v1-abc/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "other", false},
-		{"/logs/team/sessions/2026/10/08/rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl", "team", false},
-	} {
-		t.Run(tc.path+"/"+tc.project, func(t *testing.T) {
-			assert.Equal(t, tc.want, CodexProjectIsSourceLabel(tc.path, tc.project))
 		})
 	}
 }

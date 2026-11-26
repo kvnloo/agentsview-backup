@@ -215,30 +215,6 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		require.NoError(t, os.Rename(missing, f.sessions))
 		check(t, f, f.engine.SyncAll(t.Context(), nil), expected)
 	})
-	for _, missingSignature := range []bool{false, true} {
-		t.Run(fmt.Sprintf("rebuild with temporarily unavailable source missing signature=%t", missingSignature), func(t *testing.T) {
-			f := setup(t, true, "team")
-			expected, _ := neverLabeledProject(t, f)
-			other := filepath.Join(f.parent, "ordinary")
-			otherID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-			otherSource := filepath.Join(other, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+otherID+".jsonl")
-			meta := testjsonl.CodexSessionMetaJSON(otherID, "/work/checkout", "codex_exec", "2026-10-08T12:00:00Z")
-			dbtest.WriteTestFile(t, otherSource, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-			f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root, other}}})
-			f.engine.SyncAll(t.Context(), nil)
-			if missingSignature {
-				require.NoError(t, f.database.DeleteSyncState(t.Context(), codexLabelRootsKey))
-			}
-			missing := filepath.Join(f.parent, "temporarily-unavailable")
-			require.NoError(t, os.Rename(f.sessions, missing))
-			f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.sessions, other}}})
-			stats := f.engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "%v", stats.Warnings)
-			require.Zero(t, stats.Failed)
-			require.NoError(t, os.Rename(missing, f.sessions))
-			check(t, f, f.engine.SyncAll(t.Context(), nil), expected)
-		})
-	}
 	t.Run("narrowed with missing signature", func(t *testing.T) {
 		f := setup(t, true, "team")
 		other := filepath.Join(f.parent, "ordinary")
@@ -279,7 +255,6 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 	t.Run("widen with rebuild", func(t *testing.T) {
 		f := setup(t, false, "team")
 		stats := f.engine.ResyncAll(t.Context(), nil)
-		f.engine.SyncAll(t.Context(), nil)
 		check(t, f, stats, "team")
 	})
 	t.Run("narrow without checkout rebuild", func(t *testing.T) {

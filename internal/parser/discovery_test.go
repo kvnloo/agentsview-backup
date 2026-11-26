@@ -34,7 +34,6 @@ func TestCodexObsoleteLabel(t *testing.T) {
 			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.source, tc.project, tc.checkoutRoot, ""))
 		})
 	}
-
 }
 
 func TestCodexProjectIsSourceLabel(t *testing.T) {

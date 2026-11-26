@@ -160,7 +160,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		engine                 *Engine
 		root, sessions, parent string
 	}
-	setup := func(t *testing.T, initiallyLabeled bool) fixture {
+	setup := func(t *testing.T, initiallyLabeled bool, cwdName string) fixture {
 		t.Helper()
 		database := openTestDB(t)
 		parent := t.TempDir()
@@ -168,7 +168,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		inner := filepath.Join(root, "team")
 		sessions := filepath.Join(inner, ".codex-run-v1-abc", "sessions")
 		source := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-		meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, "team"), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+		meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, filepath.Join(parent, cwdName), "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
 		dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
 		initialRoot := sessions
 		if initiallyLabeled {
@@ -206,7 +206,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		return session.Project, snapshots["codex:"+id].Project
 	}
 	t.Run("narrow with temporarily unavailable source", func(t *testing.T) {
-		f := setup(t, true)
+		f := setup(t, true, "team")
 		expected, _ := neverLabeledProject(t, f)
 		missing := filepath.Join(f.parent, "temporarily-unavailable")
 		require.NoError(t, os.Rename(f.sessions, missing))
@@ -217,7 +217,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 	})
 	for _, missingSignature := range []bool{false, true} {
 		t.Run(fmt.Sprintf("rebuild with temporarily unavailable source missing signature=%t", missingSignature), func(t *testing.T) {
-			f := setup(t, true)
+			f := setup(t, true, "team")
 			expected, _ := neverLabeledProject(t, f)
 			other := filepath.Join(f.parent, "ordinary")
 			otherID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
@@ -240,7 +240,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		})
 	}
 	t.Run("narrowed with missing signature", func(t *testing.T) {
-		f := setup(t, true)
+		f := setup(t, true, "team")
 		other := filepath.Join(f.parent, "ordinary")
 		otherID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 		source := filepath.Join(other, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+otherID+".jsonl")
@@ -262,7 +262,7 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 	})
 	t.Run("other provider discovery failure", func(t *testing.T) {
-		f := setup(t, false)
+		f := setup(t, false, "team")
 		other := t.TempDir()
 		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.root}, parser.AgentClaude: {other}}})
 		fail := true
@@ -277,13 +277,13 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 	})
 	t.Run("widen with rebuild", func(t *testing.T) {
-		f := setup(t, false)
+		f := setup(t, false, "team")
 		stats := f.engine.ResyncAll(t.Context(), nil)
 		f.engine.SyncAll(t.Context(), nil)
 		check(t, f, stats, "team")
 	})
 	t.Run("narrow without checkout rebuild", func(t *testing.T) {
-		f := setup(t, true)
+		f := setup(t, true, "checkout")
 		before, err := f.database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"codex:" + id})
 		require.NoError(t, err)
 		expected, _ := neverLabeledProject(t, f)

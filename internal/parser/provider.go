@@ -242,6 +242,19 @@ type ReconciliationSourceRank struct {
 	Path string
 }
 
+// Lower reports whether r ranks below other: a lower class, then an older
+// copy, then the larger path. The engine's archive check and a provider that
+// picks among copies itself use it, so both keep the same copy.
+func (r ReconciliationSourceRank) Lower(other ReconciliationSourceRank) bool {
+	if r.Class != other.Class {
+		return r.Class < other.Class
+	}
+	if r.Recency != other.Recency {
+		return r.Recency < other.Recency
+	}
+	return r.Path > other.Path
+}
+
 // ReconciliationSourceRanker declares provider-specific duplicate ordering so
 // authoritative reconciliation selects the same source as FindSource.
 type ReconciliationSourceRanker interface {

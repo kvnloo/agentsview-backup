@@ -9461,18 +9461,6 @@ func reconciliationMemberIdentity(
 	return reconciliationSourceIdentity(agent, source)
 }
 
-func reconciliationSourceRankLower(
-	candidate, stored parser.ReconciliationSourceRank,
-) bool {
-	if candidate.Class != stored.Class {
-		return candidate.Class < stored.Class
-	}
-	if candidate.Recency != stored.Recency {
-		return candidate.Recency < stored.Recency
-	}
-	return candidate.Path > stored.Path
-}
-
 func (e *Engine) storedSourceRanksHigher(
 	ctx context.Context,
 	provider parser.Provider,
@@ -9496,9 +9484,7 @@ func (e *Engine) storedSourceRanksHigher(
 		if !ok {
 			return false
 		}
-		return reconciliationSourceRankLower(
-			ranker.ReconciliationSourceRank(candidate), rank,
-		)
+		return ranker.ReconciliationSourceRank(candidate).Lower(rank)
 	}
 	if e.pathRewriter != nil {
 		if e.storedPathResolver == nil {
@@ -9519,8 +9505,7 @@ func (e *Engine) storedSourceRanksHigher(
 	if !found {
 		return storedPathRanks(storedPath), nil
 	}
-	return reconciliationSourceRankLower(
-		ranker.ReconciliationSourceRank(candidate),
+	return ranker.ReconciliationSourceRank(candidate).Lower(
 		ranker.ReconciliationSourceRank(stored),
 	), nil
 }

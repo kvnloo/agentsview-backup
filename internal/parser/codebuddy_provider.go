@@ -152,8 +152,7 @@ func (p *codebuddyProvider) bestCBCCopies(ctx context.Context, sources []SourceR
 			continue
 		}
 		rank := p.ReconciliationSourceRank(source)
-		rank.Path = path
-		if current, ok := best[id]; !ok || codebuddyRankLower(current.rank, rank) {
+		if current, ok := best[id]; !ok || current.rank.Lower(rank) {
 			best[id] = pick{index: i, rank: rank}
 		}
 	}
@@ -168,18 +167,6 @@ func (p *codebuddyProvider) bestCBCCopies(ctx context.Context, sources []SourceR
 		kept = append(kept, source)
 	}
 	return kept
-}
-
-// codebuddyRankLower orders copies as the engine's archive check does: class,
-// then recency, then the smaller path.
-func codebuddyRankLower(a, b ReconciliationSourceRank) bool {
-	if a.Class != b.Class {
-		return a.Class < b.Class
-	}
-	if a.Recency != b.Recency {
-		return a.Recency < b.Recency
-	}
-	return a.Path > b.Path
 }
 
 // DiscoverEach yields the CLI and IDE 5.x transcripts, then the IDE 4.x
@@ -358,7 +345,10 @@ func (p *codebuddyProvider) legacySuperseded(ctx context.Context, source SourceR
 }
 
 // ReconciliationSourceRank ranks a CBC transcript above a 4.x manifest for
-// the same session, then newer copies above older ones.
+// the same session, then newer copies above older ones, then the smaller
+// path, the order discovery uses to keep one copy. Copies with equal
+// modification times thus rank the same way during a full sync and a change
+// event.
 func (p *codebuddyProvider) ReconciliationSourceRank(source SourceRef) ReconciliationSourceRank {
 	class := int64(1)
 	path := source.DisplayPath
@@ -368,11 +358,17 @@ func (p *codebuddyProvider) ReconciliationSourceRank(source SourceRef) Reconcili
 			path = cbcPath
 		}
 	}
+	return codebuddyRank(class, path)
+}
+
+// codebuddyRank ranks one copy of a session by its class, the file's
+// modification time, and its path.
+func codebuddyRank(class int64, path string) ReconciliationSourceRank {
 	var recency int64
 	if info, err := os.Stat(path); err == nil {
 		recency = info.ModTime().UnixNano()
 	}
-	return ReconciliationSourceRank{Class: class, Recency: recency}
+	return ReconciliationSourceRank{Class: class, Recency: recency, Path: path}
 }
 
 // RankStoredSourcePath ranks an archived CBC transcript path after CodeBuddy

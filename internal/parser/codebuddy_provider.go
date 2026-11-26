@@ -293,7 +293,8 @@ func (p *codebuddyProvider) SourceForReconciliation(
 }
 
 // ComputeMultiFileStatHash digests the transcript, its tool-results
-// directory, and the session's own catalog row so a warm process can skip
+// directory and every saved output in it, and the session's own catalog
+// row so a warm process can skip
 // unchanged CBC sources without hashing them, while a catalog write for
 // another conversation leaves this digest alone. The engine calls it on a
 // rootless probe provider, so the root comes from the path's own layout.
@@ -305,7 +306,13 @@ func (p *codebuddyProvider) ComputeMultiFileStatHash(path string) uint64 {
 	}
 	dir := filepath.Join(filepath.Dir(path),
 		strings.TrimSuffix(filepath.Base(path), ".jsonl"), "tool-results")
-	files := fileStatTupleDigest(0xCB, path, dir)
+	// Each saved tool output counts by its own metadata: rewriting one in
+	// place leaves the directory's metadata unchanged.
+	sidecars, err := codebuddyCBCSidecarFiles(context.Background(), path)
+	if err != nil {
+		return 0
+	}
+	files := fileStatTupleDigest(0xCB, append([]string{path, dir}, sidecars...)...)
 	if files == 0 {
 		return 0
 	}

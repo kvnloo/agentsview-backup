@@ -646,6 +646,28 @@ func TestCodeBuddyCBCDiscoveryContinuesPastUnreadableDirectories(t *testing.T) {
 	}
 }
 
+func TestCodeBuddyCBCStatHashFollowsSavedToolOutputs(t *testing.T) {
+	_, project := cbcHome(t)
+	path := filepath.Join(project, "run-1.jsonl")
+	writeCBC(t, path, `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`)
+	output := filepath.Join(project, "run-1", "tool-results", "call-1.txt")
+	writeCBC(t, output, "first output")
+	probe, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	before := probe.ComputeMultiFileStatHash(path)
+	require.NotZero(t, before)
+
+	// Rewriting a saved output in place leaves the directory's metadata as
+	// it was.
+	f, err := os.OpenFile(output, os.O_WRONLY|os.O_TRUNC, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("a longer second output")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.NotEqual(t, before, probe.ComputeMultiFileStatHash(path),
+		"an edited saved output invalidates the stat hash")
+}
+
 func TestCodeBuddyDiscoveryKeepsReadableSourcesPastUnreadableCLIDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not block reads on Windows")

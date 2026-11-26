@@ -48,7 +48,8 @@ type codebuddyCBCParseInput struct {
 
 // parseCodeBuddyCBCFile parses one CBC transcript into its active session and
 // any preserved alternative branches. A transcript with no conversation
-// returns no results.
+// returns no results. A conversation rewound before its first message has no
+// active session, but its earlier history still returns as branches.
 func parseCodeBuddyCBCFile(
 	ctx context.Context, in codebuddyCBCParseInput,
 ) ([]ParseResult, error) {
@@ -132,16 +133,20 @@ func parseCodeBuddyCBCFile(
 			base.RelationshipType = RelFork
 		}
 	}
-	if len(main.messages) == 0 && !t.truncated {
-		return nil, nil
+	var results []ParseResult
+	// An empty active session is left out: the sidebar hides an empty
+	// session together with its children, so emitting one would also hide
+	// the preserved branches. The branches still name it as their parent and
+	// nest under it once the conversation continues.
+	if len(main.messages) > 0 || t.truncated {
+		mainSess := base
+		codebuddyFinishSession(&mainSess, main, title)
+		mainSess.StartedAt = earlierTime(t.firstTime, main.startedAt)
+		mainSess.EndedAt = laterTime(t.lastTime, main.endedAt)
+		mainSess.TerminationStatus = Classify(main.messages,
+			codebuddyStopReason(t.stopReason, main.messages), t.truncated)
+		results = append(results, ParseResult{Session: mainSess, Messages: main.messages})
 	}
-	mainSess := base
-	codebuddyFinishSession(&mainSess, main, title)
-	mainSess.StartedAt = earlierTime(t.firstTime, main.startedAt)
-	mainSess.EndedAt = laterTime(t.lastTime, main.endedAt)
-	mainSess.TerminationStatus = Classify(main.messages,
-		codebuddyStopReason(t.stopReason, main.messages), t.truncated)
-	results := []ParseResult{{Session: mainSess, Messages: main.messages}}
 	for _, branch := range codebuddyCBCAlternatives(t.items, active) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -155,8 +160,8 @@ func parseCodeBuddyCBCFile(
 		}
 		first := t.items[branch.indexes[0]]
 		fork := base
-		fork.ID = mainSess.ID + "-" + first.id
-		fork.ParentSessionID = mainSess.ID
+		fork.ID = base.ID + "-" + first.id
+		fork.ParentSessionID = base.ID
 		fork.RelationshipType = RelFork
 		fork.SourceSessionID = ""
 		fork.IsTruncated = false
@@ -166,6 +171,9 @@ func parseCodeBuddyCBCFile(
 		fork.TerminationStatus = Classify(alt.messages,
 			codebuddyStopReason("", alt.messages), false)
 		results = append(results, ParseResult{Session: fork, Messages: alt.messages})
+	}
+	if len(results) == 0 {
+		return nil, nil
 	}
 	codebuddyLinkSubagentCalls(results, ident, main.subagentCalls)
 	return results, nil

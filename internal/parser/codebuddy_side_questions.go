@@ -54,6 +54,13 @@ func codebuddySideQuestionResults(
 	if main.RelationshipType == RelSubagent {
 		return nil
 	}
+	if main.RelationshipType == RelFork && main.SourceSessionID == "" &&
+		main.ParentSessionID != "" {
+		// A conversation rewound before its first message returns only its
+		// preserved branches; side questions still belong to the
+		// conversation's own session.
+		main.ID = main.ParentSessionID
+	}
 	var out []ParseResult
 	if len(entry.btw) > 0 {
 		out = append(out, codebuddySideSession(main, "btw", "btw",

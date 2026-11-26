@@ -906,3 +906,52 @@ func TestCodeBuddyCBCTeammateMessagesOutsideAssignments(t *testing.T) {
 	assert.Equal(t, "peer_message", child.Messages[1].SourceSubtype,
 		"a teammate message after a typed prompt is not an assignment")
 }
+
+// A conversation rewound before its first message has no current turns, but
+// the history it replaced stays readable as a fork, and its side questions
+// still attach to the conversation.
+func TestCodeBuddyCBCRewoundBeforeFirstMessageKeepsHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  []string
+	}{
+		{
+			name: "rewound history becomes a fork",
+			lines: []string{
+				`{"id":"u1","type":"message","role":"user","timestamp":1000,"sessionId":"run-r","content":[{"type":"input_text","text":"first try"}]}`,
+				`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1001,"content":[{"type":"output_text","text":"old answer"}]}`,
+				`{"id":"n1","type":"resend-fork-notice","timestamp":1002}`,
+			},
+			want: []string{"codebuddy:run-r-u1", "codebuddy:run-r:btw"},
+		},
+		{
+			name:  "metadata only yields nothing",
+			lines: []string{`{"type":"session-meta","id":"m","sessionId":"run-r","meta":{}}`, `{"id":"n1","type":"resend-fork-notice","timestamp":1002}`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, project := cbcHome(t)
+			writeCBC(t, filepath.Join(project, "run-r.jsonl"), tc.lines...)
+			writeCBCCatalog(t, home,
+				`INSERT INTO conversations (id, title, runtime_session_id) VALUES ('conv-r', 'Rewound', 'run-r')`,
+				`INSERT INTO btw_entries VALUES ('conv-r', '[{"id":"b1","question":"side q","answer":"side a","createdAt":2000}]')`)
+			t.Cleanup(clearCodeBuddyCatalogCache)
+			results := parseCBCHome(t, home)
+			var ids []string
+			for _, r := range results {
+				ids = append(ids, r.Session.ID)
+				assert.Equal(t, "codebuddy:run-r", r.Session.ParentSessionID, r.Session.ID)
+			}
+			if len(tc.want) == 0 {
+				assert.Empty(t, ids)
+				return
+			}
+			assert.ElementsMatch(t, tc.want, ids, "the empty current session is left out so the fork stays visible")
+			fork := cbcSession(t, results, "codebuddy:run-r-u1")
+			assert.Equal(t, RelFork, fork.Session.RelationshipType)
+			require.Len(t, fork.Messages, 2)
+			assert.Equal(t, "old answer", fork.Messages[1].Content)
+		})
+	}
+}

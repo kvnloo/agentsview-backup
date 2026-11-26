@@ -1,10 +1,12 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -559,6 +561,72 @@ func TestCodeBuddyCBCStatHashFollowsOwnCatalogRow(t *testing.T) {
 	writeCBCCatalog(t, home, `UPDATE conversations SET custom_title = 'Renamed' WHERE id = 'c1'`)
 	clearCodeBuddyCatalogCache()
 	assert.NotEqual(t, before, probe.ComputeMultiFileStatHash(path))
+}
+
+func TestCodeBuddyCBCDiscoveryContinuesPastUnreadableDirectories(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	for _, blocked := range []string{"project", "subagents"} {
+		t.Run(blocked, func(t *testing.T) {
+			projects := filepath.Join(t.TempDir(), "projects")
+			readable := filepath.Join(projects, "b-readable", "s1.jsonl")
+			writeCBC(t, readable, line)
+			dir := filepath.Join(projects, "a-blocked")
+			if blocked == "subagents" {
+				dir = filepath.Join(projects, "b-readable", "s1", "subagents")
+			}
+			writeCBC(t, filepath.Join(dir, "agent-a.jsonl"), line)
+			require.NoError(t, os.Chmod(dir, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			// List projects in name order so the blocked one comes first.
+			ctx := withStreamingDirectoryReader(t.Context(), func(_ context.Context, path string, yield func(os.DirEntry) error) error {
+				entries, err := os.ReadDir(path)
+				if err != nil {
+					return err
+				}
+				for _, entry := range entries {
+					if err := yield(entry); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+
+			set := newCodeBuddyCBCSourceSet([]string{projects}, "")
+			var paths []string
+			err := set.DiscoverEach(ctx, func(source SourceRef) error {
+				paths = append(paths, source.DisplayPath)
+				return nil
+			})
+			require.ErrorIs(t, err, os.ErrPermission, "the unreadable directory marks discovery incomplete")
+			var incomplete DiscoveryIncompleteError
+			require.ErrorAs(t, err, &incomplete)
+			assert.Equal(t, []string{readable}, paths,
+				"readable transcripts are still found beside the unreadable directory")
+		})
+	}
+}
+
+func TestCodeBuddyCBCSourcePathRejectsUnusableStems(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	for _, tc := range []struct {
+		rel  string
+		want bool
+	}{
+		{"-work-demo/run-1.jsonl", true},
+		{"项目/run-1.jsonl", true},
+		{"-work-demo/run 1.jsonl", false},
+		{"-work-demo/agent-a.jsonl", false},
+		{"-work-demo/run-1/subagents/agent-a.jsonl", true},
+		{"-work-demo/run-1/subagents/helper.jsonl", false},
+	} {
+		assert.Equal(t, tc.want, codebuddyCBCSourcePath(root, filepath.Join(root, filepath.FromSlash(tc.rel))), tc.rel)
+	}
 }
 
 func TestCodeBuddyRootsSplitByLayout(t *testing.T) {

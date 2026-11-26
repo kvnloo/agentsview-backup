@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // codebuddyCBCSource is the opaque payload of one CBC transcript source.
@@ -45,8 +46,7 @@ func codebuddyCBCSourcePath(root, path string) bool {
 	switch len(parts) {
 	case 2:
 		stem := strings.TrimSuffix(parts[1], ".jsonl")
-		return IsValidSessionID(parts[0]) || parts[0] != "" && IsValidSessionID(stem) &&
-			!strings.HasPrefix(stem, "agent-")
+		return parts[0] != "" && IsValidSessionID(stem) && !strings.HasPrefix(stem, "agent-")
 	case 4:
 		stem := strings.TrimSuffix(parts[3], ".jsonl")
 		return parts[2] == "subagents" && IsValidSessionID(parts[1]) &&
@@ -78,7 +78,16 @@ func (s codebuddyCBCSourceSet) DiscoverEach(
 			if !isDir {
 				return nil
 			}
-			return s.discoverProject(ctx, root, filepath.Join(root, project.Name()), yield)
+			err := s.discoverProject(ctx, root, filepath.Join(root, project.Name()), yield)
+			if err == nil {
+				return nil
+			}
+			if _, ok := discoveryYieldCause(err); ok || ctx.Err() != nil {
+				return err
+			}
+			// One unreadable project must not hide the projects after it.
+			incomplete = errors.Join(incomplete, err)
+			return nil
 		})
 		if cause, ok := discoveryYieldCause(err); ok {
 			return cause
@@ -90,6 +99,9 @@ func (s codebuddyCBCSourceSet) DiscoverEach(
 	return incomplete
 }
 
+// discoverProject yields the main and subagent transcripts of one project
+// directory. An unreadable subagents directory makes the result incomplete
+// without stopping the rest of the project.
 func (s codebuddyCBCSourceSet) discoverProject(
 	ctx context.Context, root, projectDir string, yield func(SourceRef) error,
 ) error {
@@ -100,6 +112,7 @@ func (s codebuddyCBCSourceSet) discoverProject(
 		}
 		return incompleteDiscoveryError(AgentCodeBuddy, "read "+projectDir, err)
 	}
+	var incomplete error
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -109,6 +122,10 @@ func (s codebuddyCBCSourceSet) discoverProject(
 			subagents := filepath.Join(path, "subagents")
 			subs, err := os.ReadDir(subagents)
 			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+					incomplete = errors.Join(incomplete,
+						incompleteDiscoveryError(AgentCodeBuddy, "read "+subagents, err))
+				}
 				continue
 			}
 			for _, sub := range subs {
@@ -127,7 +144,7 @@ func (s codebuddyCBCSourceSet) discoverProject(
 			}
 		}
 	}
-	return nil
+	return incomplete
 }
 
 func (s codebuddyCBCSourceSet) sourceRef(root, path string) SourceRef {

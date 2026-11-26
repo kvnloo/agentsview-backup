@@ -1063,7 +1063,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			checkoutRoot = restore.rootPath
 		}
 		if restore.agent == string(parser.AgentCodex) && parser.CodexObsoleteLabel(
-			codexRoots, restore.sourcePath, restore.currentProject, checkoutRoot,
+			codexRoots, restore.sourcePath, restore.currentProject, checkoutRoot, restore.repositoryPath,
 		) {
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE session_project_identity_snapshots SET project = ? WHERE session_id = ?`,

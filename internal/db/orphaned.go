@@ -532,8 +532,7 @@ func (d *DB) CopySyncStateFrom(ctx context.Context, sourcePath string) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 			SELECT key, value FROM old_db.pg_sync_state
-			WHERE key = 'pg_push_marker_id'
-			   OR key = 'pg_full_push_run_v1'
+			WHERE key = 'pg_push_marker_id' OR key = 'pg_full_push_run_v1'
 			   OR key LIKE 'pg\_full\_push\_run\_v1:%' ESCAPE '\'
 			   OR key = 'pg_push_state_saved_v1'
 			   OR key LIKE 'pg\_push\_state\_saved\_v1:%' ESCAPE '\'
@@ -541,7 +540,8 @@ func (d *DB) CopySyncStateFrom(ctx context.Context, sourcePath string) error {
 			   OR key LIKE 'machine\_label:%' ESCAPE '\'
 			   OR key LIKE 'machine\_alias:%' ESCAPE '\'
 			   OR key LIKE 'machine\_origin:%' ESCAPE '\'
-			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
+			   OR key = 'codex_label_roots_v1' OR key = ?
+			UNION ALL SELECT 'codex_label_roots_v1', '' WHERE NOT EXISTS (SELECT 1 FROM old_db.pg_sync_state WHERE key = 'codex_label_roots_v1')`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
 	}

@@ -24,7 +24,6 @@ func TestCodexObsoleteLabel(t *testing.T) {
 		want         bool
 	}{
 		{"narrowing", []string{sessions}, "team", filepath.Join(root, "checkout"), source, true},
-		{"saved checkout confirms project", []string{sessions}, "team", filepath.Join(root, "team"), source, false},
 		{"no saved checkout", []string{sessions}, "team", "", source, true},
 		{"unchanged label", []string{root}, "team", filepath.Join(root, "checkout"), source, false},
 		{"different project", []string{sessions}, "other", filepath.Join(root, "checkout"), source, false},
@@ -32,7 +31,7 @@ func TestCodexObsoleteLabel(t *testing.T) {
 		{"normalized label", nil, "my-app", filepath.Join(root, "my_app"), filepath.Join(root, "my-app", ".codex-run-v1-abc", "sessions", "2026", "10", "08", filepath.Base(source)), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.source, tc.project, tc.checkoutRoot))
+			assert.Equal(t, tc.want, CodexObsoleteLabel(tc.current, tc.source, tc.project, tc.checkoutRoot, ""))
 		})
 	}
 

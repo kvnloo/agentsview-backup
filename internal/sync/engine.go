@@ -11105,7 +11105,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 					checkoutRoot = snapshot.RootPath
 				}
 				if parser.CodexObsoleteLabel(
-					e.sources().agentDirs[parser.AgentCodex], sess.File.Path, snapshot.Project, checkoutRoot,
+					e.sources().agentDirs[parser.AgentCodex], sess.File.Path, snapshot.Project, checkoutRoot, snapshot.RepositoryPath,
 				) {
 					continue
 				}

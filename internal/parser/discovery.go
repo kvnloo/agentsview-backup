@@ -913,11 +913,14 @@ func CodexSourceLabelForRoots(roots []string, path string) string {
 }
 
 // CodexObsoleteLabel identifies a saved project that came from an old run label.
-func CodexObsoleteLabel(current []string, path, project, checkoutRoot string) bool {
+func CodexObsoleteLabel(current []string, path, project, checkoutRoot, repositoryPath string) bool {
 	if project == "" || CodexSourceLabelForRoots(current, path) == project {
 		return false
 	}
 	if checkoutRoot != "" && NormalizeName(filepath.Base(checkoutRoot)) == project {
+		return false
+	}
+	if repositoryPath != "" && NormalizeName(filepath.Base(repositoryPath)) == project {
 		return false
 	}
 	return CodexProjectIsSourceLabel(path, project)

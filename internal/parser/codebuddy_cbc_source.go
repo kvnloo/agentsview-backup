@@ -98,7 +98,13 @@ func (s codebuddyCBCSourceSet) DiscoverEach(
 			return cause
 		}
 		if err != nil {
-			incomplete = errors.Join(incomplete, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			// An unreadable projects root must not hide the other roots or
+			// the 4.x history searched after them.
+			incomplete = errors.Join(incomplete,
+				incompleteDiscoveryError(AgentCodeBuddy, "read "+root, err))
 		}
 	}
 	return incomplete

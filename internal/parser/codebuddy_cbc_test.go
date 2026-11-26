@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -756,6 +757,81 @@ func TestCodeBuddyDiscoveryKeepsReadableSourcesPastUnreadableCLIDirectory(t *tes
 	}
 	assert.Contains(t, paths, readable, "a readable CLI transcript is still returned")
 	assert.Contains(t, paths, manifest, "the 4.x history is still searched")
+}
+
+// An unreadable projects root leaves discovery incomplete without hiding the
+// conversations in other roots or the 4.x history.
+func TestCodeBuddyDiscoveryKeepsReadableRootsPastUnreadableProjectsRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	blocked := filepath.Join(t.TempDir(), "projects")
+	writeCBC(t, filepath.Join(blocked, "-work-demo", "s2.jsonl"), line)
+	require.NoError(t, os.Chmod(blocked, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+	readable := filepath.Join(t.TempDir(), "projects", "-work-demo", "s1.jsonl")
+	writeCBC(t, readable, line)
+	legacyRoot := t.TempDir()
+	manifest := filepath.Join(legacyRoot, "history", "ws", "conv-1", "index.json")
+	writeCBC(t, manifest, `{"messages":[]}`)
+
+	for _, order := range []string{"blocked first", "blocked last"} {
+		t.Run(order, func(t *testing.T) {
+			roots := []string{blocked, filepath.Dir(filepath.Dir(readable)), legacyRoot}
+			if order == "blocked last" {
+				roots = []string{filepath.Dir(filepath.Dir(readable)), blocked, legacyRoot}
+			}
+			p := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy, IDPrefix: "codebuddy:"}).
+				NewProvider(ProviderConfig{Roots: roots, Machine: "m"})
+			sources, err := p.Discover(t.Context())
+			require.ErrorIs(t, err, os.ErrPermission)
+			var incomplete DiscoveryIncompleteError
+			require.ErrorAs(t, err, &incomplete, "the unreadable root marks discovery incomplete")
+			var paths []string
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, []string{readable, manifest}, paths,
+				"the readable root and the 4.x history are still searched")
+		})
+	}
+}
+
+// Cancellation and a failing consumer still stop discovery at once instead
+// of reading as an incomplete scan.
+func TestCodeBuddyCBCDiscoveryStopsOnCancelOrYieldFailure(t *testing.T) {
+	line := `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"hi"}]}`
+	first := filepath.Join(t.TempDir(), "projects")
+	second := filepath.Join(t.TempDir(), "projects")
+	writeCBC(t, filepath.Join(first, "-work-demo", "s1.jsonl"), line)
+	writeCBC(t, filepath.Join(second, "-work-demo", "s2.jsonl"), line)
+	set := newCodeBuddyCBCSourceSet([]string{first, second}, "")
+
+	stop := errors.New("consumer failed")
+	calls := 0
+	err := set.DiscoverEach(t.Context(), func(SourceRef) error {
+		calls++
+		return stop
+	})
+	require.ErrorIs(t, err, stop)
+	var incomplete DiscoveryIncompleteError
+	assert.NotErrorAs(t, err, &incomplete)
+	assert.Equal(t, 1, calls, "a failing consumer stops discovery")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	calls = 0
+	err = set.DiscoverEach(ctx, func(SourceRef) error {
+		calls++
+		cancel()
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorAs(t, err, &incomplete)
+	assert.Equal(t, 1, calls, "cancellation stops discovery")
 }
 func TestCodeBuddyCBCSourcePathRejectsUnusableStems(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")

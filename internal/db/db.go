@@ -708,7 +708,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // canonical input_image blocks so image retention, offload, and image_text
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
-// (190: older binaries cannot preserve inferred parent state.)
+// (190: preserve inferred parent state and record each Codex shell call's turn directory.)
 const dataVersion = 190
 
 const archiveOnlyVersionBase = 1 << 20
@@ -2582,6 +2582,7 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{"session_external_parents", "inferred", "ALTER TABLE session_external_parents ADD COLUMN inferred INTEGER NOT NULL DEFAULT 0"},
+		{"tool_calls", "working_directory", "ALTER TABLE tool_calls ADD COLUMN working_directory TEXT"},
 		{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
 		{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 		{"cursor_usage_events", "conversation_id", "ALTER TABLE cursor_usage_events ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''"},
@@ -5452,6 +5453,7 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 	for _, name := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
+		"idx_messages_activity_timestamp",
 		"idx_messages_analytics_metadata",
 		"idx_tool_calls_session_tool_use",
 		"idx_tool_result_events_identity",

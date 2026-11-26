@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -342,4 +344,71 @@ func TestSyncCodeBuddyDeletedConvertedTranscriptKeepsArchive(t *testing.T) {
 			assertSourceMissingState(t, assertConverted("a changed 4.x copy does not replace the converted turns"))
 		})
 	}
+}
+
+// The same conversation can sit under two configured CodeBuddy homes, such as
+// a backup beside the live home. An older copy, and its agent transcript, do
+// not replace the newer turns the archive holds, while the newer copy keeps
+// updating the session.
+func TestSyncCodeBuddyOlderCopyKeepsNewerTurns(t *testing.T) {
+	newerHome, newerProject := cbcSyncHome(t)
+	olderHome, olderProject := cbcSyncHome(t)
+	turn := func(id, parent, text string, ts int) string {
+		parentField := ""
+		if parent != "" {
+			parentField = `"parentId":"` + parent + `",`
+		}
+		return `{"id":"` + id + `",` + parentField + `"type":"message","role":"user","timestamp":` +
+			strconv.Itoa(ts) + `,"content":[{"type":"input_text","text":"` + text + `"}]}`
+	}
+	transcripts := func(project string) (main, agent string) {
+		return filepath.Join(project, "conv1.jsonl"),
+			filepath.Join(project, "conv1", "subagents", "agent-a.jsonl")
+	}
+	newer, newerAgent := transcripts(newerProject)
+	writeCBCSync(t, newer, turn("u1", "", "first", 1767225600000), turn("u2", "u1", "second", 1767225700000))
+	writeCBCSync(t, newerAgent, turn("s1", "", "look", 1767225600000), turn("s2", "s1", "look again", 1767225700000))
+	database := openTestDB(t)
+	engine := newCBCEngine(t, database, newerHome, olderHome)
+	engine.SyncAll(t.Context(), nil)
+	assertTurns := func(id, path string, turns int, msg string) {
+		t.Helper()
+		sess, err := database.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, sess, msg)
+		require.NotNil(t, sess.FilePath, msg)
+		assert.Equal(t, path, *sess.FilePath, msg)
+		assert.Equal(t, turns, sess.UserMessageCount, msg)
+	}
+	assertNewer := func(msg string) {
+		t.Helper()
+		assertTurns("codebuddy:conv1", newer, 2, msg)
+		assertTurns("codebuddy:conv1:subagent:agent-a", newerAgent, 2, msg)
+	}
+	assertNewer("the only copy owns the conversation")
+
+	older, olderAgent := transcripts(olderProject)
+	writeOlder := func(text string) {
+		t.Helper()
+		writeCBCSync(t, older, turn("u1", "", text, 1767225600000))
+		writeCBCSync(t, olderAgent, turn("s1", "", text, 1767225600000))
+		stale := time.Now().Add(-time.Hour)
+		for _, path := range []string{older, olderAgent} {
+			require.NoError(t, os.Chtimes(path, stale, stale))
+		}
+	}
+	writeOlder("first")
+	engine.SyncAll(t.Context(), nil)
+	assertNewer("a discovered older copy does not replace the newer turns")
+
+	writeOlder("first, edited")
+	engine.SyncPaths([]string{older, olderAgent})
+	assertNewer("a changed older copy does not replace the newer turns")
+	engine.SyncAllForceParse(t.Context(), nil)
+	assertNewer("a forced sync keeps the newer turns")
+
+	writeCBCSync(t, newer, turn("u1", "", "first", 1767225600000), turn("u2", "u1", "second", 1767225700000),
+		turn("u3", "u2", "third", 1767225800000))
+	engine.SyncAll(t.Context(), nil)
+	assertTurns("codebuddy:conv1", newer, 3, "the newer copy still updates the session")
 }

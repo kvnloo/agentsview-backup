@@ -155,8 +155,11 @@ func (s codebuddyCBCSourceSet) sourceRef(root, path string) SourceRef {
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,
-		ProjectHint:    filepath.Base(projectDir),
-		Opaque:         codebuddyCBCSource{Root: root, Path: path},
+		// Copies of one conversation under different roots or projects name
+		// the same session; the engine ranks each against the archived copy.
+		ReconciliationIdentity: codebuddyCBCIdentityForPath(path).rawID,
+		ProjectHint:            filepath.Base(projectDir),
+		Opaque:                 codebuddyCBCSource{Root: root, Path: path},
 	}
 }
 

@@ -147,6 +147,9 @@ func parseCodeBuddyCBCFile(
 			codebuddyStopReason(t.stopReason, main.messages), t.truncated)
 		results = append(results, ParseResult{Session: mainSess, Messages: main.messages})
 	}
+	// A call in a preserved branch names its child transcript only in that
+	// branch's result, so every path contributes its mappings.
+	calls := main.subagentCalls
 	for _, branch := range codebuddyCBCAlternatives(t.items, active) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -157,6 +160,11 @@ func parseCodeBuddyCBCFile(
 		}
 		if alt.userCount == 0 && !codebuddyHasAssistantContent(alt.messages) {
 			continue
+		}
+		for callID, agentID := range alt.subagentCalls {
+			if _, ok := calls[callID]; !ok {
+				calls[callID] = agentID
+			}
 		}
 		fork := base
 		fork.ID = base.ID + "-" + branch.key
@@ -174,7 +182,7 @@ func parseCodeBuddyCBCFile(
 	if len(results) == 0 {
 		return nil, nil
 	}
-	codebuddyLinkSubagentCalls(results, ident, main.subagentCalls)
+	codebuddyLinkSubagentCalls(results, ident, calls)
 	return results, nil
 }
 

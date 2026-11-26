@@ -1007,3 +1007,25 @@ func TestCodeBuddyCBCDivergentBranchesSplit(t *testing.T) {
 	}
 	assert.Equal(t, 1111, total, "each response counts once across the forks")
 }
+
+// An agent call in a preserved branch opens the child transcript it started.
+func TestCodeBuddyCBCForkLinksSubagentCalls(t *testing.T) {
+	home, project := cbcHome(t)
+	writeCBC(t, filepath.Join(project, "s6.jsonl"),
+		`{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"input_text","text":"delegate"}]}`,
+		`{"id":"c1","parentId":"u1","type":"function_call","timestamp":1001,"name":"Agent","callId":"t1","arguments":"{\"prompt\":\"look\"}"}`,
+		`{"id":"r1","parentId":"c1","type":"function_call_result","timestamp":1002,"name":"Agent","callId":"t1","output":"found it","providerData":{"toolResult":{"subAgent":{"sessionId":"agent-7"}}}}`,
+		`{"id":"n1","type":"resend-fork-notice","timestamp":1003}`,
+		`{"id":"u2","type":"message","role":"user","timestamp":1004,"content":[{"type":"input_text","text":"never mind"}]}`,
+		`{"id":"a2","parentId":"u2","type":"message","role":"assistant","timestamp":1005,"content":[{"type":"output_text","text":"ok"}]}`,
+	)
+	writeCBC(t, filepath.Join(project, "s6", "subagents", "agent-7.jsonl"),
+		`{"id":"su","type":"message","role":"user","timestamp":1001,"content":[{"type":"input_text","text":"look"}]}`,
+		`{"id":"sa","parentId":"su","type":"message","role":"assistant","timestamp":1002,"content":[{"type":"output_text","text":"found it"}]}`,
+	)
+	results := parseCBCHome(t, home)
+	fork := cbcSession(t, results, "codebuddy:s6-u1")
+	require.Len(t, fork.Messages, 3)
+	require.Len(t, fork.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "codebuddy:s6:subagent:agent-7", fork.Messages[1].ToolCalls[0].SubagentSessionID)
+}

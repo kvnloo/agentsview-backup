@@ -148,11 +148,9 @@ func codebuddyActiveHistory(
 	return out
 }
 
-// codebuddyCBCBranch is one preserved alternative path. parentIx is the
-// index of the active-path item it forked from, or -1 when unknown.
+// codebuddyCBCBranch is one preserved alternative path.
 type codebuddyCBCBranch struct {
-	indexes  []int
-	parentIx int
+	indexes []int
 }
 
 // codebuddyCBCAlternatives groups conversation items outside the active
@@ -206,13 +204,7 @@ func codebuddyCBCAlternatives(
 				continue
 			}
 		}
-		parentIx := -1
-		if hasParent && onPath[parentIdx] {
-			parentIx = parentIdx
-		}
-		branches = append(branches, codebuddyCBCBranch{
-			indexes: []int{idx}, parentIx: parentIx,
-		})
+		branches = append(branches, codebuddyCBCBranch{indexes: []int{idx}})
 		branchOf[idx] = len(branches) - 1
 	}
 	return branches

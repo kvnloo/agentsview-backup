@@ -142,7 +142,6 @@ func codebuddySideSession(
 	sess.UserMessageCount = users
 	sess.FirstMessage = truncate(strings.ReplaceAll(ordered[0].question, "\n", " "), 300)
 	sess.SessionName = label + ": " + truncate(ordered[0].question, 60)
-	sess.CountsAuthoritative = false
 	accumulateMessageTokenUsage(&sess, msgs)
 	return ParseResult{Session: sess, Messages: msgs}
 }

@@ -329,9 +329,9 @@ func (s codebuddyCBCSourceSet) pathFromSource(source SourceRef) (string, string,
 	return "", "", false
 }
 
-// Fingerprint hashes the transcript, its persisted tool outputs, the user
-// images it references, and its catalog row, so a change to any of them
-// reparses the session while unrelated catalog writes leave it untouched.
+// Fingerprint hashes the transcript, its persisted tool outputs, and its
+// catalog row, so a change to any of them reparses the session while
+// unrelated catalog writes leave it untouched.
 func (s codebuddyCBCSourceSet) Fingerprint(
 	ctx context.Context, source SourceRef,
 ) (SourceFingerprint, error) {

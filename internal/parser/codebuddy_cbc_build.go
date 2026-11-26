@@ -55,7 +55,7 @@ func buildCodeBuddyCBCMessages(
 	opts codebuddyCBCBuildOptions,
 ) (codebuddyCBCBuilt, error) {
 	b := &codebuddyCBCBuilder{
-		ctx: ctx, opts: opts,
+		opts: opts,
 		built: codebuddyCBCBuilt{
 			subagentCalls: map[string]string{}, legacyClaimed: map[string]bool{},
 		},
@@ -65,7 +65,7 @@ func buildCodeBuddyCBCMessages(
 		if err := contextErrEvery(ctx, n); err != nil {
 			return codebuddyCBCBuilt{}, err
 		}
-		if err := b.add(items[idx]); err != nil {
+		if err := b.add(ctx, items[idx]); err != nil {
 			return codebuddyCBCBuilt{}, err
 		}
 	}
@@ -77,7 +77,6 @@ func buildCodeBuddyCBCMessages(
 }
 
 type codebuddyCBCBuilder struct {
-	ctx       context.Context
 	opts      codebuddyCBCBuildOptions
 	built     codebuddyCBCBuilt
 	current   *ParsedMessage
@@ -99,7 +98,7 @@ func (b *codebuddyCBCBuilder) observeTime(ts time.Time) {
 	}
 }
 
-func (b *codebuddyCBCBuilder) add(it codebuddyCBCItem) error {
+func (b *codebuddyCBCBuilder) add(ctx context.Context, it codebuddyCBCItem) error {
 	b.observeTime(it.timestamp)
 	pd := it.providerData()
 	switch it.itemType {
@@ -123,12 +122,12 @@ func (b *codebuddyCBCBuilder) add(it codebuddyCBCItem) error {
 		b.addLegacyUsage(it)
 	case "function_call":
 		b.startGroup(it)
-		b.addCall(it)
+		b.addCall(ctx, it)
 		b.addUsage(it)
 		b.addLegacyUsage(it)
 	case "function_call_result":
 		b.flush()
-		return b.addResult(it)
+		return b.addResult(ctx, it)
 	case "model-usage":
 		// Usage-only items share a response id with nothing else; keep them
 		// as hidden usage rows so the response still counts once.
@@ -207,7 +206,7 @@ func (b *codebuddyCBCBuilder) addAssistantText(it codebuddyCBCItem) {
 	b.addLegacyUsage(it)
 }
 
-func (b *codebuddyCBCBuilder) addCall(it codebuddyCBCItem) {
+func (b *codebuddyCBCBuilder) addCall(ctx context.Context, it codebuddyCBCItem) {
 	name := it.raw.Get("name").Str
 	callID := it.raw.Get("callId").Str
 	if name == "" {
@@ -232,7 +231,7 @@ func (b *codebuddyCBCBuilder) addCall(it codebuddyCBCItem) {
 	case "Skill", "skill":
 		call.SkillName = gjson.Get(input, "skill").Str
 	default:
-		call.SkillName = inferToolSkillName(b.ctx, name, input)
+		call.SkillName = inferToolSkillName(ctx, name, input)
 	}
 	if call.Rendering == "" {
 		call.Rendering = "[Tool: " + name + "]"
@@ -241,7 +240,7 @@ func (b *codebuddyCBCBuilder) addCall(it codebuddyCBCItem) {
 	b.current.HasToolUse = true
 }
 
-func (b *codebuddyCBCBuilder) addResult(it codebuddyCBCItem) error {
+func (b *codebuddyCBCBuilder) addResult(ctx context.Context, it codebuddyCBCItem) error {
 	callID := it.raw.Get("callId").Str
 	if callID == "" {
 		return nil
@@ -250,7 +249,7 @@ func (b *codebuddyCBCBuilder) addResult(it codebuddyCBCItem) error {
 	output := codebuddyCBCToolOutput(it)
 	unresolved := false
 	if path := codebuddyPersistedPath(output, pd); path != "" && b.opts.persisted != nil {
-		full, ok, err := b.opts.persisted(b.ctx, path)
+		full, ok, err := b.opts.persisted(ctx, path)
 		if err != nil {
 			return err
 		}

@@ -26,12 +26,10 @@ const CodeBuddyCatalogDBName = "codebuddy.db"
 type codebuddyCatalogEntry struct {
 	conversationID  string
 	runtimeID       string
-	provider        string
 	title           string
 	customTitle     string
 	forkParentRawID string
 	deleted         bool
-	archived        bool
 	btw             []codebuddyBtwEntry
 	discussions     []codebuddyDiscussionThread
 }
@@ -53,7 +51,6 @@ type codebuddyBtwEntry struct {
 type codebuddyDiscussionThread struct {
 	id        string
 	quote     string
-	messageID string
 	entries   []codebuddyBtwEntry
 	createdAt time.Time
 }
@@ -319,10 +316,9 @@ func readCodeBuddyConversations(
 	if cols["workspace_authority"] {
 		local = "COALESCE(workspace_authority, '') = ''"
 	}
-	query := `SELECT id, ` + optional("runtime_provider") + `, ` +
-		optional("runtime_session_id") + `, ` + optional("title") + `, ` +
-		optional("custom_title") + `, ` + optional("fork_source_id") + `, ` +
-		optionalNull("deleted_at") + `, ` + optionalNull("archived_at") +
+	query := `SELECT id, ` + optional("runtime_session_id") + `, ` +
+		optional("title") + `, ` + optional("custom_title") + `, ` +
+		optional("fork_source_id") + `, ` + optionalNull("deleted_at") +
 		` FROM conversations WHERE ` + local
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -333,8 +329,8 @@ func readCodeBuddyConversations(
 	for rows.Next() {
 		var e codebuddyCatalogEntry
 		var forkSource string
-		if err := rows.Scan(&e.conversationID, &e.provider, &e.runtimeID,
-			&e.title, &e.customTitle, &forkSource, &e.deleted, &e.archived); err != nil {
+		if err := rows.Scan(&e.conversationID, &e.runtimeID,
+			&e.title, &e.customTitle, &forkSource, &e.deleted); err != nil {
 			return nil, err
 		}
 		e.title = strings.TrimSpace(e.title)
@@ -431,7 +427,6 @@ func parseCodeBuddyDiscussionPayload(payload string) []codebuddyDiscussionThread
 	gjson.Parse(payload).ForEach(func(_, t gjson.Result) bool {
 		thread := codebuddyDiscussionThread{
 			id: t.Get("id").Str, quote: t.Get("anchor.quote").Str,
-			messageID: t.Get("anchor.messageId").Str,
 			createdAt: codebuddyCBCTimestamp(t.Get("createdAt")),
 		}
 		t.Get("entries").ForEach(func(_, e gjson.Result) bool {

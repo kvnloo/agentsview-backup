@@ -152,6 +152,10 @@ func loadCodeBuddyLegacyCompanion(
 	// Each assistant message carrying a snapshot records its own totals.
 	latest := map[string]keyed{}
 	gjson.GetBytes(index, "messages").ForEach(func(_, ref gjson.Result) bool {
+		if ctx.Err() != nil {
+			// The caller's next context check reports the cancellation.
+			return false
+		}
 		msgID := ref.Get("id").Str
 		if ref.Get("role").Str != "assistant" || !IsValidSessionID(msgID) {
 			return true

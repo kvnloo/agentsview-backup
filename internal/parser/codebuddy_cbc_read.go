@@ -52,7 +52,6 @@ func (it codebuddyCBCItem) custom() bool {
 
 // codebuddyCBCTranscript is a whole transcript read once.
 type codebuddyCBCTranscript struct {
-	path       string
 	items      []codebuddyCBCItem
 	malformed  int
 	truncated  bool
@@ -64,7 +63,6 @@ type codebuddyCBCTranscript struct {
 	entrypoint string
 	converted  bool
 	teamMember string
-	teamName   string
 	// speaker is the first providerData.agent naming a run other than the
 	// main CLI, IDE, or compaction agent; in a subagent transcript it is the
 	// subagent's display name.
@@ -91,7 +89,7 @@ func readCodeBuddyCBCTranscript(
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
 	}
-	t := &codebuddyCBCTranscript{path: path}
+	t := &codebuddyCBCTranscript{}
 	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	lastLineValid := true
@@ -199,7 +197,6 @@ func (t *codebuddyCBCTranscript) observeMeta(root gjson.Result) {
 	}
 	if member := meta.Get("teamContext.memberName").Str; member != "" {
 		t.teamMember = member
-		t.teamName = meta.Get("teamContext.teamName").Str
 	}
 	meta.Get(`codebuddy\.ai/sessionTitle`).ForEach(func(_, fact gjson.Result) bool {
 		t.addTitleFact(fact, -1)

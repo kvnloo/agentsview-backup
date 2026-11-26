@@ -560,6 +560,12 @@ temporary prompt and runs `claude < prompt` from the resolved session working
 directory. Message-point forks work only for Claude, require `fork_session`,
 reject `opener_id`, and return `404` if the ordinal is not present.
 
+For a CodeBuddy session, an `opener_id` of `codebuddy-ide` or
+`codebuddy-ide-insiders` asks that IDE to open its own record of the
+conversation instead of running the command. If the IDE has no record of it,
+or cannot be opened, the response has `launched: false` and an `error` of
+`ide_conversation_unavailable` or `desktop_launch_failed`.
+
 ______________________________________________________________________
 
 ### The `agentsview://` URL scheme

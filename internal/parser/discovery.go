@@ -929,7 +929,7 @@ func CodexObsoleteLabel(current []string, path, project, rootPath string) bool {
 	if project == "" || CodexSourceLabelForRoots(current, path) == project {
 		return false
 	}
-	if strings.ReplaceAll(filepath.Base(rootPath), "-", "_") == project {
+	if NormalizeName(filepath.Base(rootPath)) == project {
 		return false
 	}
 	for root := filepath.Dir(path); ; root = filepath.Dir(root) {

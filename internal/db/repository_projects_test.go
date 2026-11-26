@@ -189,7 +189,6 @@ func TestRepositoryProjectAttribution(t *testing.T) {
 	cleared, err := d.ClearSessionProjectAssignment(ctx, s.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "sample", cleared.Project)
-
 }
 
 func TestRepositoryProjectAttributionPreservesFolderRules(t *testing.T) {

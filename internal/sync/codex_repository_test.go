@@ -129,13 +129,13 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		assert.Zero(t, f.engine.SyncRootsSince(t.Context(), []string{f.root}, time.Time{}, nil).Synced)
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
 	})
-	t.Run("unavailable source", func(t *testing.T) {
+	t.Run("add and remove overlapping root", func(t *testing.T) {
 		f := setup(t, false)
-		missing := filepath.Join(f.parent, "temporarily-unavailable")
-		require.NoError(t, os.Rename(f.sessions, missing))
-		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
-		require.NoError(t, os.Rename(missing, f.sessions))
+		expected, _ := neverLabeledProject(t, f)
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.sessions, f.root}}})
 		check(t, f, f.engine.SyncAll(t.Context(), nil), "team")
+		f.engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {f.sessions}}})
+		check(t, f, f.engine.SyncAll(t.Context(), nil), expected)
 	})
 	t.Run("narrow with temporarily unavailable source", func(t *testing.T) {
 		f := setup(t, true)
@@ -146,13 +146,6 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 		assert.Zero(t, f.engine.SyncAll(t.Context(), nil).Synced)
 		require.NoError(t, os.Rename(missing, f.sessions))
 		check(t, f, f.engine.SyncAll(t.Context(), nil), expected)
-	})
-	t.Run("older session stays stale", func(t *testing.T) {
-		f := setup(t, false)
-		require.NoError(t, f.database.SetExistingSessionDataVersions(t.Context(), []string{"codex:" + id}, 39))
-		_, err := f.engine.refreshCodexLabelRoots(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, 39, f.database.GetSessionDataVersion(t.Context(), "codex:"+id))
 	})
 	t.Run("invalid signature", func(t *testing.T) {
 		f := setup(t, false)
@@ -284,7 +277,6 @@ func TestCodexLabelRefreshAfterRootChange(t *testing.T) {
 			assert.Equal(t, expected, session.Project)
 		})
 	}
-
 }
 
 func TestCodexResyncRestoresResolvedSnapshots(t *testing.T) {

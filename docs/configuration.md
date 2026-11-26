@@ -1438,7 +1438,8 @@ Tencent CodeBuddy CN uses the `codebuddy` agent ID for three clients:
   On Windows, the default follows `%LOCALAPPDATA%`, falling back to
   `~/AppData/Local` when that variable is unset or not absolute. macOS uses
   `~/Library/Application Support/CodeBuddyExtension/Data`, and Linux uses
-  `~/.config/CodeBuddyExtension/Data`.
+  `~/.local/share/CodeBuddyExtension/Data`, also checking
+  `~/.config/CodeBuddyExtension/Data`, where earlier AgentsView releases looked.
 
 Set `CODEBUDDY_CONFIG_DIR` to an absolute path, as you would for CodeBuddy
 itself, to move the CLI and IDE 5.x home. Set `CODEBUDDY_DIR` or

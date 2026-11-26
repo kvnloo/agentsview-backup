@@ -5747,8 +5747,16 @@ schemas keep their existing ordering behavior.
 - **Upstream:** Tencent publishes no schema or persistence producer source; its
   product site and public repositories were searched 2026-09-17. The 4.x layout
   was verified against local CodeBuddyExtension session data under
-  `CodeBuddyExtension/Data/history`. The CBC semantics were read on 2026-11-25
-  from installed producer bundles: CodeBuddy Code CLI 2.184.0
+  `CodeBuddyExtension/Data/history`. The 4.x data root per platform follows
+  the bundled genie extension 3.10.0 (`extensionDataRoot` in
+  `out/extension/index.js`, and `sharedDataPath` in `ide-cli/shared-auth.mjs`,
+  sha256 `7fbd402e08a670068b81f565bf36506c99ab5328d6f2516f3a0ab5dea35461d5`):
+  Linux and other non-macOS, non-Windows hosts use
+  `~/.local/share/CodeBuddyExtension`. On 2026-11-26 a Linux host had
+  `~/.local/share/CodeBuddyExtension/Data` with user, `default`, and `Public`
+  directories and no `~/.config/CodeBuddyExtension`; AgentsView still checks
+  `.config` because earlier releases defaulted to it. The CBC semantics were
+  read on 2026-11-25 from installed producer bundles: CodeBuddy Code CLI 2.184.0
   (`dist/codebuddy.js`, sha256
   `a2a1ed21a22ac1d48e8e38c56708c61f01c89442c135db25ffe0cd9a06fa0904`), CodeBuddy
   CN 1.122.1 (`out/main.js`, sha256

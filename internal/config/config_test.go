@@ -34,15 +34,17 @@ func TestCodeBuddyDefaultAndOverride(t *testing.T) {
 			cfg, err := Default()
 			require.NoError(t, err)
 			dirs := cfg.ResolveDirs(parser.AgentCodeBuddy)
-			require.Len(t, dirs, 4)
+			require.Len(t, dirs, 5)
 			expected := filepath.Join(home, "AppData", "Local", "CodeBuddyExtension", "Data")
 			if runtime.GOOS == "windows" && filepath.IsAbs(appData) {
 				expected = filepath.Join(appData, "CodeBuddyExtension", "Data")
 			}
 			assert.Equal(t, expected, dirs[0])
 			assert.Equal(t, filepath.Join(home, "Library", "Application Support", "CodeBuddyExtension", "Data"), dirs[1])
-			assert.Equal(t, filepath.Join(home, ".config", "CodeBuddyExtension", "Data"), dirs[2])
-			assert.Equal(t, filepath.Join(home, ".codebuddy", "projects"), dirs[3])
+			assert.Equal(t, filepath.Join(home, ".local", "share", "CodeBuddyExtension", "Data"), dirs[2])
+			assert.Equal(t, filepath.Join(home, ".config", "CodeBuddyExtension", "Data"), dirs[3],
+				"the earlier Linux default stays a root")
+			assert.Equal(t, filepath.Join(home, ".codebuddy", "projects"), dirs[4])
 			custom := canonicalTempDir(t)
 			t.Setenv("CODEBUDDY_DIR", custom)
 			cfg.loadEnv()
@@ -60,15 +62,15 @@ func TestCodeBuddyConfigDirRelocatesCLIHome(t *testing.T) {
 	cfg, err := Default()
 	require.NoError(t, err)
 	dirs := cfg.ResolveDirs(parser.AgentCodeBuddy)
-	require.Len(t, dirs, 4)
-	assert.Equal(t, filepath.Join(cliHome, "projects"), dirs[3])
-	assert.Equal(t, filepath.Join(home, ".config", "CodeBuddyExtension", "Data"), dirs[2])
+	require.Len(t, dirs, 5)
+	assert.Equal(t, filepath.Join(cliHome, "projects"), dirs[4])
+	assert.Equal(t, filepath.Join(home, ".config", "CodeBuddyExtension", "Data"), dirs[3])
 
 	t.Setenv("CODEBUDDY_CONFIG_DIR", "relative/home")
 	cfg, err = Default()
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".codebuddy", "projects"),
-		cfg.ResolveDirs(parser.AgentCodeBuddy)[3],
+		cfg.ResolveDirs(parser.AgentCodeBuddy)[4],
 		"a relative CODEBUDDY_CONFIG_DIR is not a usable home")
 }
 

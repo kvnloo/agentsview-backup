@@ -57,6 +57,12 @@ func parseCodeBuddyCBCFile(
 		return nil, err
 	}
 	ident := codebuddyCBCIdentityForPath(in.path)
+	// A transcript with no conversation item does not replace the 4.x copy
+	// of the same conversation, which still holds its turns.
+	if !ident.subagent && !t.hasConversation() &&
+		codebuddyLegacySessionDir(ctx, in.legacyRoots, t.cwd, ident.rawID) != "" {
+		return nil, nil
+	}
 	if t.sessionID != "" && !ident.subagent {
 		ident.runtimeID = t.sessionID
 	}

@@ -149,7 +149,9 @@ func (p *codebuddyProvider) FindSource(
 ) (SourceRef, bool, error) {
 	req = ProviderFindRequestWithRawSessionID(p.Def, req)
 	if source, ok, err := p.cbc.FindSource(ctx, req); ok || err != nil {
-		return source, ok, err
+		if err != nil || !p.cbcYieldsToLegacy(ctx, source, req) {
+			return source, ok, err
+		}
 	}
 	raw := req.RawSessionID
 	if base, rest, ok := strings.Cut(raw, ":"); ok && !strings.HasPrefix(rest, "subagent:") {
@@ -161,6 +163,23 @@ func (p *codebuddyProvider) FindSource(
 		req.RawSessionID = raw
 	}
 	return p.legacy.FindSource(ctx, req)
+}
+
+// cbcYieldsToLegacy reports whether a found CBC transcript holds no turn of
+// the conversation while a 4.x copy of the same session exists, so lookups
+// keep reaching the 4.x copy until the transcript gains a turn.
+func (p *codebuddyProvider) cbcYieldsToLegacy(
+	ctx context.Context, source SourceRef, req FindSourceRequest,
+) bool {
+	_, path, ok := p.cbc.pathFromSource(source)
+	if !ok || codebuddyCBCIdentityForPath(path).subagent || codebuddyCBCHasConversation(ctx, path) {
+		return false
+	}
+	legacyReq := req
+	legacyReq.StoredFilePath, legacyReq.FingerprintKey = "", ""
+	legacyReq.RawSessionID = codebuddyCBCIdentityForPath(path).rawID
+	_, found, err := p.legacy.FindSource(ctx, legacyReq)
+	return err == nil && found
 }
 
 func (p *codebuddyProvider) isCBC(source SourceRef) bool {
@@ -202,7 +221,9 @@ func (p *codebuddyProvider) Parse(
 }
 
 // legacySuperseded reports whether a CBC transcript now owns the session a
-// 4.x manifest source names.
+// 4.x manifest source names. A transcript owns it once it holds a turn of
+// the conversation; an empty, meta-only, or unreadable transcript leaves the
+// 4.x copy in place.
 func (p *codebuddyProvider) legacySuperseded(ctx context.Context, source SourceRef) bool {
 	if len(p.cbc.roots) == 0 {
 		return false
@@ -212,8 +233,12 @@ func (p *codebuddyProvider) legacySuperseded(ctx context.Context, source SourceR
 		return false
 	}
 	id := filepath.Base(filepath.Dir(path))
-	_, found, err := p.cbc.FindSource(ctx, FindSourceRequest{RawSessionID: id})
-	return err == nil && found
+	cbc, found, err := p.cbc.FindSource(ctx, FindSourceRequest{RawSessionID: id})
+	if err != nil || !found {
+		return false
+	}
+	_, cbcPath, ok := p.cbc.pathFromSource(cbc)
+	return ok && codebuddyCBCHasConversation(ctx, cbcPath)
 }
 
 // ReconciliationSourceRank ranks a CBC transcript above a 4.x manifest for

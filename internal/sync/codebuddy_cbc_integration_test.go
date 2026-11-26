@@ -111,6 +111,62 @@ func TestSyncCodeBuddyConvertedConversationKeepsOneSession(t *testing.T) {
 	assert.Equal(t, 2, sess.UserMessageCount)
 }
 
+// A CodeBuddy transcript that holds no turn of the conversation, such as an
+// empty file, a converter's meta line alone, or unreadable text, leaves the
+// 4.x copy of the same conversation in place until the transcript gains a
+// turn.
+func TestSyncCodeBuddyEmptyTranscriptKeepsLegacyCopy(t *testing.T) {
+	meta := `{"type":"session-meta","id":"m","sessionId":"conv1","meta":{"codebuddy.ai/converterVersion":"ide-main-craft-jsonl/29"}}`
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"empty file", ""},
+		{"meta line only", meta + "\n"},
+		{"unreadable line", "not json\n"},
+		{"cut-off first line", `{"id":"u1","type":"mess`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, project := cbcSyncHome(t)
+			legacyRoot := t.TempDir()
+			convDir := filepath.Join(legacyRoot, "history", "ws", "conv1")
+			require.NoError(t, os.MkdirAll(filepath.Join(convDir, "messages"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(convDir, "index.json"),
+				[]byte(`{"messages":[{"id":"u1","role":"user"},{"id":"u2","role":"user"}]}`), 0o600))
+			for id, text := range map[string]string{"u1": "first", "u2": "second"} {
+				require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", id+".json"),
+					[]byte(`{"role":"user","message":{"content":[{"type":"text","text":"`+text+`"}]}}`), 0o600))
+			}
+			transcript := filepath.Join(project, "conv1.jsonl")
+			require.NoError(t, os.WriteFile(transcript, []byte(tc.content), 0o600))
+			database := openTestDB(t)
+			engine := newCBCEngine(t, database, home, legacyRoot)
+			engine.SyncAll(t.Context(), nil)
+
+			sess, err := database.GetSessionFull(t.Context(), "codebuddy:conv1")
+			require.NoError(t, err)
+			require.NotNil(t, sess, "the 4.x conversation stays visible")
+			require.NotNil(t, sess.FilePath)
+			assert.Equal(t, filepath.Join(convDir, "index.json"), *sess.FilePath)
+			assert.Equal(t, 2, sess.UserMessageCount)
+
+			// Once the transcript holds a turn, it owns the conversation.
+			writeCBCSync(t, transcript, meta,
+				`{"id":"u1","type":"message","role":"user","timestamp":1767225601000,"content":[{"type":"input_text","text":"first"}]}`,
+				`{"id":"u2","parentId":"u1","type":"message","role":"user","timestamp":1767225602000,"content":[{"type":"input_text","text":"second"}]}`,
+				`{"id":"u3","parentId":"u2","type":"message","role":"user","timestamp":1767225700000,"content":[{"type":"input_text","text":"continued in 5.x"}]}`,
+			)
+			engine.SyncAll(t.Context(), nil)
+			sess, err = database.GetSessionFull(t.Context(), "codebuddy:conv1")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			require.NotNil(t, sess.FilePath)
+			assert.Equal(t, transcript, *sess.FilePath)
+			assert.Equal(t, 3, sess.UserMessageCount)
+		})
+	}
+}
+
 // Renaming a conversation in the IDE changes only codebuddy.db. A catalog
 // event reaches the renamed conversation.
 func TestSyncCodeBuddyCatalogRenameUpdatesTitle(t *testing.T) {

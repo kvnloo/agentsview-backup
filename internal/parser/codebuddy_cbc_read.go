@@ -50,6 +50,49 @@ func (it codebuddyCBCItem) custom() bool {
 	return codebuddyCBCCustomTypes[it.itemType]
 }
 
+// codebuddyCBCConversationTypes are the item types that carry a turn of the
+// conversation itself.
+var codebuddyCBCConversationTypes = map[string]bool{
+	"message": true, "reasoning": true, "function_call": true,
+	"function_call_result": true,
+}
+
+// hasConversation reports whether the transcript holds any conversation
+// item. A file that is empty, holds only session-meta or custom items, or
+// cannot be parsed has none.
+func (t *codebuddyCBCTranscript) hasConversation() bool {
+	for _, it := range t.items {
+		if codebuddyCBCConversationTypes[it.itemType] {
+			return true
+		}
+	}
+	return false
+}
+
+// codebuddyCBCHasConversation reports whether the transcript at path holds
+// any conversation item, stopping at the first one.
+func codebuddyCBCHasConversation(ctx context.Context, path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	lr := newLineReaderContext(ctx, f, maxLineSize)
+	defer releaseLineReader(lr)
+	for {
+		line, ok := lr.next()
+		if !ok {
+			return false
+		}
+		if !gjson.Valid(line) {
+			continue
+		}
+		if codebuddyCBCConversationTypes[gjson.Get(line, "type").Str] {
+			return true
+		}
+	}
+}
+
 // codebuddyCBCTranscript is a whole transcript read once.
 type codebuddyCBCTranscript struct {
 	items      []codebuddyCBCItem

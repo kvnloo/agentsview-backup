@@ -11732,6 +11732,10 @@ func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 // after a rewind, the conversation's new copy no longer holds the call its
 // branch now shows. Each transcript's sessions are read once however many
 // branches need an output, and the index keeps only the requested outputs.
+// The same conversation can sit under several configured homes, and the
+// archive may hold it from another copy than the one being written, so the
+// index also reads the sessions saved from the copies the batch's sessions
+// were archived from.
 func (e *Engine) preloadRelatedSourceArchives(
 	ctx context.Context, batch []pendingWrite,
 ) error {
@@ -11756,14 +11760,67 @@ func (e *Engine) preloadRelatedSourceArchives(
 		index.Want(pw.msgs)
 		pw.sourceToolResults = index
 	}
+	archivedCopies := e.archivedSourceCopies(ctx, batch, bySource)
 	for _, path := range paths {
-		if err := e.loadSourceToolResults(
-			ctx, bySource[path], path, parser.AgentCodeBuddy,
-		); err != nil {
-			return err
+		for _, from := range append([]string{path}, archivedCopies[path]...) {
+			if err := e.loadSourceToolResults(
+				ctx, bySource[path], from, parser.AgentCodeBuddy,
+			); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// archivedSourceCopies returns, for each transcript path in bySource, the
+// other source paths the archive saved the batch's sessions from. A newer
+// copy of a conversation under another configured home replaces the copy
+// the archive holds, and a rewind in the newer copy moves a call to a branch
+// whose output only the archived copy still holds. A rewound branch also
+// names its conversation, which the batch may not write. Trashed and deleted
+// sessions stay excluded when those paths are read, and a branch restores an
+// output only when every other session agrees on its text.
+func (e *Engine) archivedSourceCopies(
+	ctx context.Context, batch []pendingWrite,
+	bySource map[string]*ingest.SourceToolResults,
+) map[string][]string {
+	if len(bySource) == 0 {
+		return nil
+	}
+	reader, ok := e.historyStore().(interface {
+		GetSessionFilePath(context.Context, string) string
+	})
+	if !ok {
+		return nil
+	}
+	var copies map[string][]string
+	for i := range batch {
+		pw := &batch[i]
+		if pw.sess.Agent != parser.AgentCodeBuddy || pw.sess.File.Path == "" {
+			continue
+		}
+		path := e.effectiveSourcePath(pw.sess.File.Path)
+		if _, ok := bySource[path]; !ok {
+			continue
+		}
+		ids := []string{pw.sess.ID}
+		if pw.sess.RelationshipType == parser.RelFork &&
+			pw.sess.SourceSessionID == "" && pw.sess.ParentSessionID != "" {
+			ids = append(ids, pw.sess.ParentSessionID)
+		}
+		for _, id := range ids {
+			stored := reader.GetSessionFilePath(ctx, applyIDPrefixToID(e.idPrefix, id))
+			if stored == "" || stored == path || slices.Contains(copies[path], stored) {
+				continue
+			}
+			if copies == nil {
+				copies = make(map[string][]string)
+			}
+			copies[path] = append(copies[path], stored)
+		}
+	}
+	return copies
 }
 
 // loadSourceToolResults adds to index the requested tool outputs archived by

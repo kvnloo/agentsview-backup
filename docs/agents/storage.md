@@ -445,8 +445,12 @@ of a transcript, it reads the archived rows of every session saved from that
 transcript that the user has not trashed or deleted, including sessions whose
 source is missing, and keeps only the outputs its writes flagged
 (`ingest.SourceToolResults`). One index serves every branch of the
-transcript. A branch restores an output from the other sessions only when its
-own archive lacks the identity and every other session holds the same text.
+transcript. When the archive saved a written session, or a branch's
+conversation, from another copy of the transcript under another configured
+home, the index reads that copy's saved sessions too, so a newer copy that
+rewinds a call still finds the output the older copy saved. A branch restores
+an output from the other sessions only when its own archive lacks the identity
+and every other session holds the same text.
 
 ### Codex deletion scope
 

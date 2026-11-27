@@ -24,15 +24,7 @@ func TestSyncAllSinceCodeBuddyConvertedFollowsLegacyTotals(t *testing.T) {
 		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1767225602000,"content":[{"type":"output_text","text":"old reply"}]}`,
 	)
 	writeCodeBuddyLegacyUsage(t, convDir, map[string]int{"a1": 40})
-	old := time.Now().Add(-30 * 24 * time.Hour)
-	for _, path := range []string{
-		transcript,
-		filepath.Join(convDir, "index.json"),
-		filepath.Join(convDir, "messages", "a1.json"),
-		filepath.Join(convDir, "messages"),
-	} {
-		require.NoError(t, os.Chtimes(path, old, old))
-	}
+	since := backdateCBCTrees(t, home, legacyRoot)
 
 	database := openTestDB(t)
 	engine := newCBCEngine(t, database, home, legacyRoot)
@@ -42,10 +34,14 @@ func TestSyncAllSinceCodeBuddyConvertedFollowsLegacyTotals(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.FileMtime)
+	requireQuickSyncSkipsUnchanged(t, engine, since)
 
-	since := time.Now().Add(-time.Minute)
-	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "a1.json"),
+	// Only the 4.x message file changes after the cutoff.
+	message := filepath.Join(convDir, "messages", "a1.json")
+	require.NoError(t, os.WriteFile(message,
 		[]byte(`{"role":"assistant","createdAt":"2026-01-01T00:00:02Z","extra":{"requestId":"req-a1","modelId":"glm-x","statsSnapshot":{"inputTokens":300,"outputTokens":75}}}`), 0o600))
+	later := since.Add(time.Second)
+	require.NoError(t, os.Chtimes(message, later, later))
 	engine.SyncAllSince(t.Context(), since, nil)
 
 	assert.Equal(t, 75, cbcDailyTotals(t, database).OutputTokens,

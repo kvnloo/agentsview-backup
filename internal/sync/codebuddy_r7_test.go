@@ -70,16 +70,18 @@ func TestSyncCodeBuddyRecentSyncFollowsSavedOutput(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(side), 0o755))
 	require.NoError(t, os.WriteFile(side, []byte("first output"), 0o600))
 	writeCBCSync(t, transcript, cbcPersistedTurn(side)...)
-	old := time.Now().Add(-2 * time.Hour)
-	require.NoError(t, os.Chtimes(transcript, old, old))
-	require.NoError(t, os.Chtimes(side, old, old))
+	since := backdateCBCTrees(t, home)
 
 	database := openTestDB(t)
 	engine := newCBCEngine(t, database, home)
 	engine.SyncAll(t.Context(), nil)
 	require.Equal(t, "first output", cbcToolResult(t, database, "codebuddy:s1", "c1"))
+	requireQuickSyncSkipsUnchanged(t, engine, since)
 
+	// Only the saved output changes after the cutoff.
 	require.NoError(t, os.WriteFile(side, []byte("second output"), 0o600))
-	engine.SyncAllSince(t.Context(), time.Now().Add(-time.Hour), nil)
+	later := since.Add(time.Second)
+	require.NoError(t, os.Chtimes(side, later, later))
+	engine.SyncAllSince(t.Context(), since, nil)
 	assert.Equal(t, "second output", cbcToolResult(t, database, "codebuddy:s1", "c1"))
 }

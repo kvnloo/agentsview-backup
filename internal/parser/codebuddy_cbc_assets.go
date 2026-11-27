@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.kenn.io/agentsview/internal/assets"
 )
@@ -28,22 +29,55 @@ type codebuddyBlobAssets struct {
 	home         string
 	assetsDir    string
 	legacyAssets string
+	// storeFailed records an image that was read but could not be saved in
+	// the asset store, so the parse is retried once the store is writable.
+	storeFailed *atomic.Bool
 }
+
+// codebuddyImageOutcome tells apart why an attached image has no link: its
+// original is gone, or the asset store could not save it. Only a failed save
+// is worth retrying while the transcript is unchanged.
+type codebuddyImageOutcome uint8
+
+const (
+	codebuddyImageMissing codebuddyImageOutcome = iota
+	codebuddyImageSaved
+	codebuddyImageStoreFailed
+)
 
 // ImageReference returns the asset reference for one attached image. Without
 // an asset directory it still computes the content-addressed reference so the
 // parse stays deterministic; writing happens only when assetsDir is set.
+// An image the store cannot save reports false and is recorded in
+// storeFailed.
 func (a codebuddyBlobAssets) ImageReference(ref codebuddyImageRef) (string, bool) {
+	asset, outcome := a.resolve(ref)
+	if outcome == codebuddyImageStoreFailed && a.storeFailed != nil {
+		a.storeFailed.Store(true)
+	}
+	return asset, outcome == codebuddyImageSaved
+}
+
+func (a codebuddyBlobAssets) resolve(ref codebuddyImageRef) (string, codebuddyImageOutcome) {
 	body, mediaType, ok := a.read(ref)
 	if !ok {
-		return a.storedBlob(ref)
+		if asset, ok := a.storedBlob(ref); ok {
+			return asset, codebuddyImageSaved
+		}
+		return "", codebuddyImageMissing
 	}
 	if a.assetsDir == "" {
 		asset, err := assets.Reference(mediaType, body)
-		return asset, err == nil
+		if err != nil {
+			return "", codebuddyImageMissing
+		}
+		return asset, codebuddyImageSaved
 	}
 	asset, _, err := assets.Put(a.assetsDir, mediaType, body)
-	return asset, err == nil
+	if err != nil {
+		return "", codebuddyImageStoreFailed
+	}
+	return asset, codebuddyImageSaved
 }
 
 // storedBlob finds the archived copy of a blob-store image whose original is

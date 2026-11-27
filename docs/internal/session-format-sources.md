@@ -5816,7 +5816,8 @@ schemas keep their existing ordering behavior.
     local home checked on 2026-11-27), which is also the asset store's object
     name. When the original is deleted, the reparse links the stored copy an
     earlier import saved, after checking its digest; an image never saved
-    stays a placeholder.
+    stays a placeholder. An image the asset store fails to save marks the
+    parse for retry, so an ordinary sync saves it once the store is writable.
   - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
     member name, otherwise the subagent preset name. The CLI writes that name
     to each subagent item's `providerData.agent`; main transcripts carry

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,6 +44,36 @@ func cbcImageSync(t *testing.T, database *db.DB) (home, blobPath string, png []b
 }
 
 var cbcAssetLinkRe = regexp.MustCompile(`!\[image\]\(asset://([0-9a-f]{64}\.png)\)`)
+
+// An image that could not be saved because the asset store was unwritable
+// is saved by the next ordinary sync once the store is writable again, even
+// though the transcript is unchanged.
+func TestSyncCodeBuddyRetriesImageAfterAssetStoreRepair(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block writes here")
+	}
+	database := openTestDB(t)
+	home, _, png, prompt := cbcImageSync(t, database)
+	assetsDir := t.TempDir()
+	require.NoError(t, os.Chmod(assetsDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(assetsDir, 0o755) })
+	database.SetAssetsDir(assetsDir)
+	engine := newCBCEngine(t, database, home)
+
+	engine.SyncAll(t.Context(), nil)
+	assert.NotContains(t, prompt(), "![image](asset://",
+		"an image the store could not save is not linked")
+
+	require.NoError(t, os.Chmod(assetsDir, 0o755))
+	engine.SyncAll(t.Context(), nil)
+	got := prompt()
+	link := cbcAssetLinkRe.FindStringSubmatch(got)
+	require.Len(t, link, 2, "the repaired store gets the image: %q", got)
+	assert.NotContains(t, got, "[image unavailable")
+	saved, err := os.ReadFile(filepath.Join(assetsDir, link[1]))
+	require.NoError(t, err, "the retry saves the image in the asset store")
+	assert.Equal(t, png, saved)
+}
 
 // Deleting an imported image's original keeps the archived image: the
 // reparse that the deletion triggers finds the verified stored copy.

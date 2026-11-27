@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -642,6 +643,7 @@ func (s codebuddyCBCSourceSet) Parse(
 		path: path, project: req.Source.ProjectHint, machine: req.Machine,
 		legacyRoots: s.legacyRoots,
 	}
+	var imageStoreFailed atomic.Bool
 	if root != "" {
 		catalog, err := loadCodeBuddyCatalog(ctx, codebuddyCatalogPathForProjects(root))
 		if err != nil {
@@ -652,6 +654,7 @@ func (s codebuddyCBCSourceSet) Parse(
 		}
 		in.opts.assets = codebuddyBlobAssets{
 			home: filepath.Dir(filepath.Clean(root)), assetsDir: s.assetsDir,
+			storeFailed: &imageStoreFailed,
 		}
 	}
 	in.opts.persisted = codebuddyPersistedOutputReader(path, req.StoredPathResolver, req.Machine)
@@ -679,7 +682,15 @@ func (s codebuddyCBCSourceSet) Parse(
 		// An unreadable persisted output stays flagged on its tool result so
 		// archive reconciliation keeps the text saved earlier. A late file
 		// changes the fingerprint, which reparses the session.
-		out = append(out, ParseResultOutcome{Result: result, DataVersion: DataVersionCurrent})
+		outcome := ParseResultOutcome{Result: result, DataVersion: DataVersionCurrent}
+		if imageStoreFailed.Load() {
+			// An image the asset store could not save shows a placeholder
+			// for now. The transcript and its fingerprint stay the same
+			// once the store is repaired, so only a retry saves it.
+			outcome.DataVersion = DataVersionNeedsRetry
+			outcome.RetryReason = "codebuddy image could not be saved to the asset store"
+		}
+		out = append(out, outcome)
 	}
 	return ParseOutcome{Results: out, ResultSetComplete: true, ForceReplace: true}, nil
 }

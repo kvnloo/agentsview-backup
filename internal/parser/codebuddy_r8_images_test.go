@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,6 +71,53 @@ func TestCodeBuddyCBCMissingOriginalUsesVerifiedStoredCopy(t *testing.T) {
 			if tc.wantLink {
 				assert.Contains(t, prompt, "![image](asset://"+blob+".png)")
 				assert.NotContains(t, prompt, "[image unavailable")
+			} else {
+				assert.Contains(t, prompt, "[image unavailable: shot.png]")
+			}
+		})
+	}
+}
+
+// An image the asset store cannot save asks for a retry, because the
+// unchanged transcript would otherwise never be parsed again. Missing
+// originals and saved images need no retry.
+func TestCodeBuddyCBCImageStoreFailureNeedsRetry(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block writes here")
+	}
+	tests := []struct {
+		name         string
+		readOnly     bool
+		deleteBlob   bool
+		wantVersion  DataVersionState
+		wantImage    bool
+		wantRetryMsg bool
+	}{
+		{name: "store unwritable", readOnly: true, wantVersion: DataVersionNeedsRetry, wantRetryMsg: true},
+		{name: "store writable", wantVersion: DataVersionCurrent, wantImage: true},
+		{name: "original missing", deleteBlob: true, wantVersion: DataVersionCurrent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home, _, blobPath, _ := cbcImageHome(t)
+			assetsDir := t.TempDir()
+			if tc.readOnly {
+				require.NoError(t, os.Chmod(assetsDir, 0o555))
+				t.Cleanup(func() { _ = os.Chmod(assetsDir, 0o755) })
+			}
+			if tc.deleteBlob {
+				require.NoError(t, os.Remove(blobPath))
+			}
+			got := parseCBCImageHome(t, home, assetsDir)
+			assert.Equal(t, tc.wantVersion, got.DataVersion)
+			if tc.wantRetryMsg {
+				assert.Contains(t, got.RetryReason, "asset store")
+			} else {
+				assert.Empty(t, got.RetryReason)
+			}
+			prompt := got.Result.Messages[0].Content
+			if tc.wantImage {
+				assert.Contains(t, prompt, "![image](asset://")
 			} else {
 				assert.Contains(t, prompt, "[image unavailable: shot.png]")
 			}

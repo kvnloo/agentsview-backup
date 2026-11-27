@@ -5812,6 +5812,11 @@ schemas keep their existing ordering behavior.
     exists and its size. The warm stat digest covers the same blob paths,
     present or not. A blob-store change event selects no transcript, so an
     image restored after the first import appears on the next ordinary sync.
+  - A blob's name is the SHA-256 of its bytes (every one of 926 blobs in a
+    local home checked on 2026-11-27), which is also the asset store's object
+    name. When the original is deleted, the reparse links the stored copy an
+    earlier import saved, after checking its digest; an image never saved
+    stays a placeholder.
   - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
     member name, otherwise the subagent preset name. The CLI writes that name
     to each subagent item's `providerData.agent`; main transcripts carry

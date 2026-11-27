@@ -36,7 +36,7 @@ type codebuddyBlobAssets struct {
 func (a codebuddyBlobAssets) ImageReference(ref codebuddyImageRef) (string, bool) {
 	body, mediaType, ok := a.read(ref)
 	if !ok {
-		return "", false
+		return a.storedBlob(ref)
 	}
 	if a.assetsDir == "" {
 		asset, err := assets.Reference(mediaType, body)
@@ -46,6 +46,42 @@ func (a codebuddyBlobAssets) ImageReference(ref codebuddyImageRef) (string, bool
 	return asset, err == nil
 }
 
+// storedBlob finds the archived copy of a blob-store image whose original is
+// gone. CodeBuddy names each blob by the SHA-256 of its bytes, which is also
+// the asset store's object name, so a copy saved by an earlier import is
+// found and verified by that digest. An image never archived stays missing.
+func (a codebuddyBlobAssets) storedBlob(ref codebuddyImageRef) (string, bool) {
+	blob, ok := codebuddyBlobID(ref.blobID)
+	if !ok || a.assetsDir == "" {
+		return "", false
+	}
+	root, err := os.OpenRoot(a.assetsDir)
+	if err != nil {
+		return "", false
+	}
+	defer root.Close()
+	for _, ext := range codebuddyBlobExtensions(ref.mime) {
+		if ext == ".jpeg" {
+			// The asset store saves JPEG images as .jpg.
+			continue
+		}
+		if assets.IsCompleteObject(root, blob+ext, -1, blob) {
+			return "asset://" + blob + ext, true
+		}
+	}
+	return "", false
+}
+
+// codebuddyBlobID returns a reference's blob id when it names a blob-store
+// object: 64 lowercase hex digits.
+func codebuddyBlobID(id string) (string, bool) {
+	blob := strings.ToLower(id)
+	if len(blob) != 64 || strings.Trim(blob, "0123456789abcdef") != "" {
+		return "", false
+	}
+	return blob, true
+}
+
 func (a codebuddyBlobAssets) read(ref codebuddyImageRef) ([]byte, string, bool) {
 	if strings.HasPrefix(ref.dataURL, "data:") {
 		return codebuddyDecodeDataURL(ref.dataURL)
@@ -53,8 +89,8 @@ func (a codebuddyBlobAssets) read(ref codebuddyImageRef) ([]byte, string, bool) 
 	if name, ok := strings.CutPrefix(ref.assetURI, "codebuddy-asset://assets/"); ok {
 		return a.readLegacyAsset(name)
 	}
-	blob := strings.ToLower(ref.blobID)
-	if len(blob) != 64 || strings.Trim(blob, "0123456789abcdef") != "" || a.home == "" {
+	blob, ok := codebuddyBlobID(ref.blobID)
+	if !ok || a.home == "" {
 		return nil, "", false
 	}
 	dir := filepath.Join(a.home, "blobs", blob[:2])

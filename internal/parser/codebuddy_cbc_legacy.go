@@ -50,7 +50,8 @@ type codebuddyLegacyHistoryDirs struct {
 }
 
 // codebuddyLegacyHistoryDirsFor lists the history directories under one 4.x
-// root, reusing a recent listing.
+// root, reusing a recent listing. A root that is itself a history directory,
+// as remote sync mirrors one from a CodeBuddy home, lists itself.
 func codebuddyLegacyHistoryDirsFor(ctx context.Context, root string) []string {
 	codebuddyLegacyHistoryCache.Lock()
 	cached, ok := codebuddyLegacyHistoryCache.byRoot[root]
@@ -70,7 +71,7 @@ func codebuddyLegacyHistoryDirsFor(ctx context.Context, root string) []string {
 		if !d.IsDir() {
 			return nil
 		}
-		if d.Name() == "history" && path != root {
+		if d.Name() == "history" {
 			dirs = append(dirs, path)
 			return filepath.SkipDir
 		}
@@ -236,13 +237,18 @@ func writeCodeBuddyLegacyCompanionState(
 }
 
 // codebuddyLegacyConversationID returns the conversation id of a path in a
-// 4.x conversation directory, history/<ws>/<id>/..., under root.
+// 4.x conversation directory, history/<ws>/<id>/..., under root. root may be
+// the history directory itself.
 func codebuddyLegacyConversationID(root, path string) (string, bool) {
-	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
+	root = filepath.Clean(root)
+	rel, ok := relUnder(root, filepath.Clean(path))
 	if !ok {
 		return "", false
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if filepath.Base(root) == "history" {
+		parts = append([]string{"history"}, parts...)
+	}
 	for i := 0; i+2 < len(parts); i++ {
 		if parts[i] == "history" && IsValidSessionID(parts[i+1]) && IsValidSessionID(parts[i+2]) {
 			return parts[i+2], true

@@ -164,7 +164,7 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if def.Type == parser.AgentCodeBuddy {
-				cbcDirs, cbcFiles, legacy, err := resolveCodeBuddyTargets(ctx, dir)
+				cbcDirs, cbcFiles, wholeRoot, err := resolveCodeBuddyTargets(ctx, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -174,7 +174,7 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 						providerExtraFiles[def.Type] = append(providerExtraFiles[def.Type], file)
 					}
 				}
-				if !legacy {
+				if !wholeRoot {
 					continue
 				}
 			}
@@ -884,17 +884,14 @@ func curatedFileOrMissing(root, path string) (bool, error) {
 // resolveCodeBuddyTargets narrows a CodeBuddy root to what its parsers read.
 // A CLI and IDE 5.x home sends its projects directory, the IDE catalog, and
 // only the blob-store images its transcripts reference; the rest of the home
-// holds settings and caches. legacy reports whether the root also holds
-// IDE 4.x history, which keeps the whole-root transfer.
-func resolveCodeBuddyTargets(ctx context.Context, root string) (dirs, files []string, legacy bool, err error) {
+// holds settings and caches. A home that also holds IDE 4.x history sends
+// its history directory beside them. wholeRoot reports a 4.x data root,
+// which is sent whole.
+func resolveCodeBuddyTargets(ctx context.Context, root string) (dirs, files []string, wholeRoot bool, err error) {
 	clean := filepath.Clean(root)
 	cbc := parser.CodeBuddyCBCProjectsRoots(clean)
 	if len(cbc) == 0 {
 		return nil, nil, true, nil
-	}
-	if info, statErr := os.Stat(filepath.Join(clean, "history")); statErr == nil && info.IsDir() &&
-		filepath.Base(clean) != "projects" {
-		legacy = true
 	}
 	for _, projects := range cbc {
 		if info, statErr := os.Stat(projects); statErr != nil || !info.IsDir() {
@@ -919,7 +916,13 @@ func resolveCodeBuddyTargets(ctx context.Context, root string) (dirs, files []st
 		}
 		files = append(files, blobs...)
 	}
-	return dirs, files, legacy, nil
+	// The receiver reads the mirrored history directory as a 4.x root.
+	history := filepath.Join(clean, "history")
+	if info, statErr := os.Stat(history); statErr == nil && info.IsDir() &&
+		filepath.Base(clean) != "projects" {
+		dirs = append(dirs, history)
+	}
+	return dirs, files, false, nil
 }
 
 // checkReadableDir reports whether dir can be listed.

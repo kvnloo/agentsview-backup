@@ -134,6 +134,82 @@ func TestCodeBuddyRemoteTargetsFailOnUnreadableProjects(t *testing.T) {
 	require.Error(t, err)
 }
 
+// writeCodeBuddyRemoteHistory adds IDE 4.x history to a CodeBuddy home: one
+// conversation only 4.x holds, and the 4.x request totals of a conversation
+// the IDE converted to the CLI/5.x format. It also adds a cache directory.
+func writeCodeBuddyRemoteHistory(t *testing.T, home string) {
+	t.Helper()
+	only4x := filepath.Join(home, "history", "ws", "conv-4x")
+	require.NoError(t, os.MkdirAll(filepath.Join(only4x, "messages"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(only4x, "index.json"), []byte(`{"messages":[{"id":"u1"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(only4x, "messages", "u1.json"),
+		[]byte(`{"role":"user","message":{"content":[{"type":"text","text":"<user_query>from 4.x</user_query>"}]}}`), 0o600))
+
+	converted := filepath.Join(home, "history", "ws", "conv-1")
+	require.NoError(t, os.MkdirAll(filepath.Join(converted, "messages"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(converted, "index.json"), []byte(`{"messages":[{"id":"a1","role":"assistant"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(converted, "messages", "a1.json"),
+		[]byte(`{"role":"assistant","createdAt":"2026-01-01T00:00:02Z","extra":{"requestId":"req-a1","modelId":"glm-x","statsSnapshot":{"inputTokens":300,"outputTokens":40}}}`), 0o600))
+	transcript := `{"type":"session-meta","id":"m","sessionId":"conv-1","meta":{"codebuddy.ai/converterVersion":"ide-main-craft-jsonl/29"}}` + "\n" +
+		`{"id":"u1","type":"message","role":"user","timestamp":1767225601000,"content":[{"type":"input_text","text":"old prompt"}]}` + "\n" +
+		`{"id":"a1","parentId":"u1","type":"message","role":"assistant","timestamp":1767225602000,"content":[{"type":"output_text","text":"old reply"}]}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(home, "projects", "-work", "conv-1.jsonl"), []byte(transcript), 0o600))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "cache"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "cache", "state.bin"), []byte("cache"), 0o600))
+}
+
+// A home holding both formats sends its 4.x history beside the CLI/5.x data
+// and leaves settings, caches, and unreferenced images at home. The receiver
+// imports both formats, and a converted conversation keeps its 4.x totals.
+func TestCodeBuddyRemoteHomeWithHistorySendsOnlyConversations(t *testing.T) {
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	home, _ := writeCodeBuddyRemoteHome(t)
+	writeCodeBuddyRemoteHistory(t, home)
+
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCodeBuddy: {home},
+	}})
+	assert.Equal(t, []string{filepath.Join(home, "projects"), filepath.Join(home, "history")},
+		targets.Dirs[parser.AgentCodeBuddy])
+	extra := targets.ProviderExtraFiles[parser.AgentCodeBuddy]
+	assert.Contains(t, extra, filepath.Join(home, parser.CodeBuddyCatalogDBName))
+	used := strings.Repeat("ab", 32)
+	assert.Contains(t, extra, filepath.Join(home, "blobs", used[:2], used+".png"))
+
+	var archive bytes.Buffer
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
+	names := strings.Join(keys(archiveEntries(t, archive.Bytes())), "\n")
+	assert.Contains(t, names, "run-1.jsonl")
+	assert.Contains(t, names, "conv-4x/index.json")
+	assert.Contains(t, names, "conv-4x/messages/u1.json")
+	assert.Contains(t, names, used+".png")
+	assert.NotContains(t, names, strings.Repeat("cd", 32), "an unreferenced image stays home")
+	assert.NotContains(t, names, "settings.json")
+	assert.NotContains(t, names, "state.bin")
+
+	extracted := t.TempDir()
+	_, err = ExtractTarStream(t.Context(), bytes.NewReader(archive.Bytes()), extracted)
+	require.NoError(t, err)
+	_, err = Importer{Host: "devbox", DB: database}.ImportExtracted(t.Context(), targets, extracted)
+	require.NoError(t, err)
+
+	for _, id := range []string{"run-1", "conv-4x", "conv-1"} {
+		sess, err := database.GetSession(t.Context(), "devbox~codebuddy:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, sess, id)
+	}
+	converted, err := database.GetSessionFull(t.Context(), "devbox~codebuddy:conv-1")
+	require.NoError(t, err)
+	require.NotNil(t, converted)
+	require.NotNil(t, converted.FilePath)
+	assert.Equal(t, "devbox:"+filepath.Join(home, "projects", "-work", "conv-1.jsonl"), *converted.FilePath,
+		"the CLI/5.x copy owns the converted conversation")
+	assert.Equal(t, 40, converted.TotalOutputTokens, "the mirrored 4.x history supplies the request totals")
+}
+
 func TestImporterReadsCodeBuddyCatalogFromRemoteHome(t *testing.T) {
 	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)

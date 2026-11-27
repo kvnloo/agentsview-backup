@@ -201,8 +201,10 @@ func loadCodeBuddyLegacyCompanion(
 // writeCodeBuddyLegacyCompanionState writes the state of what a converted
 // conversation reads from its 4.x directory: where the directory is, its
 // manifest, its messages directory and each message file, and its assets
-// directory. A change to any of them, or the directory appearing, changes
-// the written state. A missing directory writes only its absence.
+// directory and each image in it. The manifest, message files, and images
+// count by content, because an edit or a repair can keep a file's size and
+// modification time. A change to any of them, or the directory appearing,
+// changes the written state. A missing directory writes only its absence.
 func writeCodeBuddyLegacyCompanionState(
 	ctx context.Context, w io.Writer, roots []string, cwd, id string,
 ) error {
@@ -213,11 +215,19 @@ func writeCodeBuddyLegacyCompanionState(
 	}
 	_, _ = fmt.Fprintf(w, "legacy\x00%s\x00", dir)
 	messages := filepath.Join(dir, "messages")
-	paths := []string{filepath.Join(dir, "index.json"), messages, filepath.Join(dir, "assets")}
+	assetsDir := filepath.Join(dir, "assets")
+	paths := []string{filepath.Join(dir, "index.json"), messages, assetsDir}
 	entries, _ := os.ReadDir(messages)
 	for _, entry := range entries {
 		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".json") {
 			paths = append(paths, filepath.Join(messages, entry.Name()))
+		}
+	}
+	// Images are read by plain name from the top of the assets directory.
+	images, _ := os.ReadDir(assetsDir)
+	for _, entry := range images {
+		if entry.Type().IsRegular() {
+			paths = append(paths, filepath.Join(assetsDir, entry.Name()))
 		}
 	}
 	for _, path := range paths {
@@ -230,8 +240,22 @@ func writeCodeBuddyLegacyCompanionState(
 			_, _ = fmt.Fprintf(w, "missing\x00%s\x00", filepath.ToSlash(rel))
 			continue
 		}
-		_, _ = fmt.Fprintf(w, "file\x00%s\x00%d\x00%d\x00",
-			filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano())
+		content := ""
+		// An image larger than the reader accepts stays a placeholder
+		// whatever it holds, so its size alone decides.
+		oversized := filepath.Dir(path) == assetsDir && info.Size() > maxCodeBuddyImageBytes
+		if info.Mode().IsRegular() && !oversized {
+			content, err = codebuddySidecarContentHash(ctx, path, info)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				// The file becoming readable changes this entry.
+				content = "unreadable"
+			}
+		}
+		_, _ = fmt.Fprintf(w, "file\x00%s\x00%d\x00%d\x00%s\x00",
+			filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano(), content)
 	}
 	return nil
 }

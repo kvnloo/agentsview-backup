@@ -7143,10 +7143,11 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	}
 	// A CodeBuddy CLI or IDE 5.x fingerprint records the transcript's own
 	// modification time, which ranks copies of one conversation. A saved
-	// tool output rewritten after the transcript must still pass the
-	// cutoff, so the cutoff also takes its tool-results metadata.
+	// tool output, or the 4.x data a converted conversation reads, changed
+	// after the transcript must still pass the cutoff, so the cutoff also
+	// takes their stat metadata.
 	if file.Agent == parser.AgentCodeBuddy && ingest.RestoresPersistedToolResults(file.Agent, file.Path) {
-		return parser.ClaudeLayoutCompositeMtime(file.Path)
+		return parser.CodeBuddyCutoffMtime(ctx, file.Path, e.sources().agentDirs[parser.AgentCodeBuddy])
 	}
 	// Watermark-only shared-container sources carry their session-row
 	// watermark from discovery. Consulting the provider Fingerprint instead

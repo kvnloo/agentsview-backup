@@ -333,7 +333,7 @@ func ensureTransportContext(
 				if intent == transportIntentRead {
 					return transport{}, errors.New(
 						"daemon restart required: running daemon version differs from this client; " +
-							"run `agentsview daemon restart` or unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml to allow automatic replacement",
+							"restart the service managing agentsview, or run `agentsview daemon restart` if no service manager is in use; unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml to allow automatic replacement",
 					)
 				}
 				return tr, nil

@@ -692,6 +692,21 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesOlderDaemon(
 	assert.Contains(t, err.Error(), "agentsview daemon restart")
 }
 
+func TestEnsureTransport_SavedPolicyGuidesManagedRestart(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
+	setTestVersion(t, "1.1.0")
+	forbidStartBackgroundServeForTransport(t, "managed service must own replacement")
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restart the service")
+	assert.Contains(t, err.Error(), "if no service manager is in use")
+}
+
 func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDaemon(
 	t *testing.T,
 ) {

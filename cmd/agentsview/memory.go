@@ -398,11 +398,6 @@ func requestLocalMemoryRefresh(ctx context.Context) error {
 	}
 	tr, err := ensureTransportContext(ctx, &cfg, transportIntentWritableDaemon, memorySessionStartTimeout)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil && !daemonAutostartDisabled() && !cfg.NoDaemonAutostart && !cfg.RequireDaemon {
-			if saved, loadErr := savedNoDaemonAutostart(cfg.DataDir); loadErr == nil && saved {
-				return errors.New("memory session-start: writable local daemon is unavailable")
-			}
-		}
 		return fmt.Errorf("memory session-start: local daemon: %w", err)
 	}
 	if tr.Mode != transportHTTP || tr.ReadOnly {

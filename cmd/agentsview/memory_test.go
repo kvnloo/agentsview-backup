@@ -114,8 +114,8 @@ func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	err := requestLocalMemoryRefresh(ctx)
-	require.EqualError(t, err, "memory session-start: writable local daemon is unavailable")
-	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "memory session-start: local daemon:")
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 

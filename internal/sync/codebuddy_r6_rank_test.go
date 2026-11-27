@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,6 +63,64 @@ func TestSyncCodeBuddyDeletedNewerCopyKeepsArchivedTurns(t *testing.T) {
 			tc.sync(t, engine, older)
 			assertCBCCopyOwner(t, database, older, 4,
 				"a backup modified after the archived transcript takes over")
+		})
+	}
+}
+
+// writeCodeBuddyHistory writes a 4.x conversation with one user turn under
+// a home's history folder and returns its manifest path.
+func writeCodeBuddyHistory(t *testing.T, home, id, text string) string {
+	t.Helper()
+	convDir := filepath.Join(home, "history", "ws", id)
+	require.NoError(t, os.MkdirAll(filepath.Join(convDir, "messages"), 0o755))
+	manifest := filepath.Join(convDir, "index.json")
+	require.NoError(t, os.WriteFile(manifest,
+		[]byte(`{"messages":[{"id":"u1","role":"user"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "u1.json"),
+		[]byte(`{"role":"user","message":{"content":[{"type":"text","text":"`+text+`"}]}}`), 0o600))
+	return manifest
+}
+
+// A configured CodeBuddy home can hold CLI/5.x transcripts beside 4.x
+// history. A watched-folder scan of that home reconciles both: it saves a
+// new 4.x conversation and a new transcript, and records a removed 4.x
+// conversation as missing.
+func TestSyncCodeBuddyHomeScanCoversBothLayouts(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		name := "scoped scan"
+		if full {
+			name = "full recovery scan"
+		}
+		t.Run(name, func(t *testing.T) {
+			home, project := cbcSyncHome(t)
+			writeCBCSync(t, filepath.Join(project, "cli1.jsonl"), cbcCopyTurns(1, "cli")...)
+			removed := writeCodeBuddyHistory(t, home, "old4", "old")
+			database := openTestDB(t)
+			engine := newCBCEngine(t, database, home)
+			engine.SyncAll(t.Context(), nil)
+			for _, id := range []string{"codebuddy:cli1", "codebuddy:old4"} {
+				sess, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, sess, id)
+			}
+
+			added := writeCodeBuddyHistory(t, home, "new4", "new")
+			addedCLI := filepath.Join(project, "cli2.jsonl")
+			writeCBCSync(t, addedCLI, cbcCopyTurns(1, "cli two")...)
+			require.NoError(t, os.RemoveAll(filepath.Dir(removed)))
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{home}, full))
+
+			sess, err := database.GetSessionFull(t.Context(), "codebuddy:new4")
+			require.NoError(t, err)
+			require.NotNil(t, sess, "the scan saves a new 4.x conversation")
+			require.NotNil(t, sess.FilePath)
+			assert.Equal(t, added, *sess.FilePath)
+			sess, err = database.GetSessionFull(t.Context(), "codebuddy:cli2")
+			require.NoError(t, err)
+			assert.NotNil(t, sess, "the scan saves a new transcript")
+			sess, err = database.GetSessionFull(t.Context(), "codebuddy:old4")
+			require.NoError(t, err)
+			assertSourceMissingState(t, sess)
 		})
 	}
 }

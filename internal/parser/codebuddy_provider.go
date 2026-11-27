@@ -574,10 +574,15 @@ func (p *codebuddyProvider) ResolveReconciliationScopes(
 	roots := append(append([]string(nil), p.cbc.roots...), p.legacy.roots...)
 	requested := make([]string, 0, len(req.Roots))
 	for _, root := range req.Roots {
-		if _, cbc := splitCodeBuddyRoots([]string{root}); len(cbc) == 1 {
-			root = cbc[0]
+		// A home maps to its transcript folder and, when it also holds 4.x
+		// history, stays a 4.x root, so the scan covers both layouts.
+		legacy, cbc := splitCodeBuddyRoots([]string{root})
+		if len(cbc) == 0 {
+			requested = append(requested, root)
+			continue
 		}
-		requested = append(requested, root)
+		requested = append(requested, cbc...)
+		requested = append(requested, legacy...)
 	}
 	if err := ValidateReconciliationScopeRoots(p.Def.Type, roots, requested); err != nil {
 		return ReconciliationScopePlan{}, err

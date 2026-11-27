@@ -166,24 +166,36 @@ var codebuddyBlobRefCache = struct {
 }{byPath: make(map[string]codebuddyBlobRefs)}
 
 type codebuddyBlobRefs struct {
-	size  int64
-	mtime int64
-	ids   []string
+	size, mtime, ctime int64
+	inode              uint64
+	ids                []string
 }
 
 // codebuddyTranscriptBlobIDs lists the blob ids one transcript references,
-// reusing the previous read while the file's size and modification time are
-// unchanged. A transcript removed mid-scan references nothing.
+// reusing the previous read while the file's size, modification time, change
+// time, and inode are unchanged. A rewrite that restores the modification
+// time still moves the change time. Without a change time or inode the
+// transcript is read every time. A transcript removed mid-scan references
+// nothing.
 func codebuddyTranscriptBlobIDs(ctx context.Context, path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil //nolint:nilerr // A removed transcript references nothing.
 	}
-	codebuddyBlobRefCache.Lock()
-	cached, ok := codebuddyBlobRefCache.byPath[path]
-	codebuddyBlobRefCache.Unlock()
-	if ok && cached.size == info.Size() && cached.mtime == info.ModTime().UnixNano() {
-		return cached.ids, nil
+	ctime, verified := codexIndexChangeTime(path, info)
+	inode, _ := sourceFileIdentityForPath(path, info)
+	key := codebuddyBlobRefs{
+		size: info.Size(), mtime: info.ModTime().UnixNano(), ctime: ctime, inode: inode,
+	}
+	cacheable := verified && inode != 0
+	if cacheable {
+		codebuddyBlobRefCache.Lock()
+		cached, ok := codebuddyBlobRefCache.byPath[path]
+		codebuddyBlobRefCache.Unlock()
+		if ok && cached.size == key.size && cached.mtime == key.mtime &&
+			cached.ctime == key.ctime && cached.inode == key.inode {
+			return cached.ids, nil
+		}
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -210,13 +222,15 @@ func codebuddyTranscriptBlobIDs(ctx context.Context, path string) ([]string, err
 	if err := lr.Err(); err != nil {
 		return nil, err
 	}
+	if !cacheable {
+		return ids, nil
+	}
+	key.ids = ids
 	codebuddyBlobRefCache.Lock()
 	if len(codebuddyBlobRefCache.byPath) >= 1<<16 {
 		clear(codebuddyBlobRefCache.byPath)
 	}
-	codebuddyBlobRefCache.byPath[path] = codebuddyBlobRefs{
-		size: info.Size(), mtime: info.ModTime().UnixNano(), ids: ids,
-	}
+	codebuddyBlobRefCache.byPath[path] = key
 	codebuddyBlobRefCache.Unlock()
 	return ids, nil
 }

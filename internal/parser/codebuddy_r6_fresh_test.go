@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,4 +87,39 @@ func TestCodeBuddyCBCFingerprintFollowsLegacyCompanionContents(t *testing.T) {
 				"an in-place edit of a 4.x file the conversation reads changes the fingerprint")
 		})
 	}
+}
+
+// A transcript rewritten to reference another image, keeping its size and
+// modification time, lists the new image, so the image arriving later
+// changes the fingerprint and shows.
+func TestCodeBuddyCBCBlobReferencesFollowInPlaceRewrite(t *testing.T) {
+	home, project := cbcHome(t)
+	projects := filepath.Dir(project)
+	line := func(blob string) string {
+		return `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"image_blob_ref","blob_id":"` + blob + `","mime":"image/png"}]}`
+	}
+	first, second := strings.Repeat("ab", 32), strings.Repeat("cd", 32)
+	path := filepath.Join(project, "run-1.jsonl")
+	writeCBC(t, path, line(first))
+	ids, err := codebuddyTranscriptBlobIDs(t.Context(), path)
+	require.NoError(t, err)
+	require.Equal(t, []string{first}, ids)
+
+	codebuddyRewriteInPlace(t, path, []byte(line(second)+"\n"))
+	ids, err = codebuddyTranscriptBlobIDs(t.Context(), path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{second}, ids, "the rewritten transcript's reference is read again")
+
+	set := newCodeBuddyCBCSourceSet([]string{projects}, "")
+	source := set.sourceRef(projects, path)
+	before, err := set.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	png, err := base64.StdEncoding.DecodeString(cbcPNG)
+	require.NoError(t, err)
+	stored := filepath.Join(home, "blobs", "cd", second+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stored), 0o755))
+	require.NoError(t, os.WriteFile(stored, png, 0o600))
+	after, err := set.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash, "the newly referenced image arriving changes the fingerprint")
 }

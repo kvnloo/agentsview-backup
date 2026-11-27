@@ -472,11 +472,11 @@ func waitForManagedDaemon(ctx, waitCtx context.Context, cfg *config.Config, time
 }
 
 func savedNoDaemonAutostart(dataDir string) (bool, error) {
-	cfg, err := config.LoadReadOnlyAt(dataDir)
+	saved, err := config.LoadSavedNoDaemonAutostart(dataDir)
 	if err != nil {
 		return false, fmt.Errorf("loading daemon configuration: %w", err)
 	}
-	return cfg.SavedNoDaemonAutostart, nil
+	return saved, nil
 }
 
 func waitForBackgroundLaunchBeforeArchiveWrite(

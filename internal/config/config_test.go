@@ -51,6 +51,48 @@ func TestNoDaemonAutostartConfig(t *testing.T) {
 	})
 }
 
+func TestLoadSavedNoDaemonAutostart(t *testing.T) {
+	for _, tc := range []struct {
+		name, toml, legacy string
+		want               bool
+		wantErr            bool
+	}{
+		{name: "missing"},
+		{name: "unrelated invalid setting", toml: "no_daemon_autostart = true\n[insights]\nmodel = 'incomplete'\n", want: true},
+		{name: "unrelated wrong type", toml: "no_daemon_autostart = true\nport = 'invalid'\n", want: true},
+		{name: "wrong policy type", toml: "no_daemon_autostart = 'true'\n", wantErr: true},
+		{name: "invalid TOML", toml: "[broken\n", wantErr: true},
+		{name: "legacy JSON", legacy: `{"no_daemon_autostart":true}`, want: true},
+		{name: "TOML takes precedence", toml: "no_daemon_autostart = false\n", legacy: `{"no_daemon_autostart":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			if tc.toml != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(tc.toml), 0o600))
+			}
+			if tc.legacy != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(tc.legacy), 0o600))
+			}
+			got, err := LoadSavedNoDaemonAutostart(dir)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+			}
+		})
+	}
+	t.Run("default data directory", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+		got, err := LoadSavedNoDaemonAutostart("")
+		require.NoError(t, err)
+		assert.True(t, got)
+	})
+}
+
 func TestCodeBuddyDefaultAndOverride(t *testing.T) {
 	home := canonicalTempDir(t)
 	setTestHome(t, home)

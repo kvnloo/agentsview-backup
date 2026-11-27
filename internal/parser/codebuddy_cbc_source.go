@@ -449,6 +449,9 @@ func (s codebuddyCBCSourceSet) pathFromSource(source SourceRef) (string, string,
 // unrelated catalog writes leave it untouched. Output contents count because
 // a rewrite can keep a file's size and modification time. A blob is named by
 // its content digest, so its presence, size, and readability are enough.
+// The size and modification time are the transcript's own: the archive ranks
+// a deleted copy by them against the transcripts of the copies that remain,
+// so a saved output written later must not make that copy look newer.
 func (s codebuddyCBCSourceSet) Fingerprint(
 	ctx context.Context, source SourceRef,
 ) (SourceFingerprint, error) {
@@ -466,8 +469,6 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 	}
 	h := sha256.New()
 	_, _ = fmt.Fprintf(h, "transcript\x00%s\x00", transcriptHash)
-	size := info.Size()
-	mtime := info.ModTime().UnixNano()
 	sidecars, err := codebuddyCBCSidecarFiles(ctx, path)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -489,8 +490,6 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 		}
 		_, _ = fmt.Fprintf(h, "sidecar\x00%s\x00%d\x00%d\x00%s\x00",
 			filepath.ToSlash(rel), sidecarInfo.Size(), sidecarInfo.ModTime().UnixNano(), content)
-		size += sidecarInfo.Size()
-		mtime = max(mtime, sidecarInfo.ModTime().UnixNano())
 	}
 	header := readCodeBuddyCBCHeader(ctx, path)
 	if root != "" {
@@ -533,8 +532,8 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 	inode, device := sourceFileIdentity(info)
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
-		Size:    size,
-		MTimeNS: mtime,
+		Size:    info.Size(),
+		MTimeNS: info.ModTime().UnixNano(),
 		Inode:   inode,
 		Device:  device,
 		Hash:    hex.EncodeToString(h.Sum(nil)),

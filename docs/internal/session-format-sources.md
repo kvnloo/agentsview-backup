@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-23
+last_edited: 2026-11-26
 ---
 
 # Session Format Source Inventory
@@ -1352,6 +1352,14 @@ fixtures retain this field; missing identities remain source-local.
   directory and its `session_index.jsonl` beside that directory. The sandbox
   omits `--thread-source`, so Agentsview identifies parentless `codex_exec`
   sessions in these homes as roborev runs from their path.
+
+- **Roborev recorded labels (2026-11-26):** `CodexSandbox.prepare` in
+  `internal/agent/codex_sandbox.go` writes `roborev.json` in the retained
+  `.codex-run-v1-*` home before the run starts, with a `label` string.
+  AgentsView reads it from the parent of the rollout's `sessions` directory.
+  A missing, malformed, or empty label falls back to the path-derived label;
+  a read error fails the parse for retry. `TestCodexRecordedRunLabel` covers
+  both forms.
 
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence of

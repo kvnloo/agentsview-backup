@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -442,11 +443,12 @@ func (s codebuddyCBCSourceSet) pathFromSource(source SourceRef) (string, string,
 }
 
 // Fingerprint hashes the transcript, the contents of its persisted tool
-// outputs, its catalog row, and, for a conversation converted from 4.x, the
-// 4.x directory it reads usage and images from, so a change to any of them
-// reparses the session while unrelated catalog writes leave it untouched.
-// Output contents count because a rewrite can keep a file's size and
-// modification time.
+// outputs, which of its blob-store images are present, its catalog row, and,
+// for a conversation converted from 4.x, the 4.x directory it reads usage and
+// images from, so a change to any of them reparses the session while
+// unrelated catalog writes leave it untouched. Output contents count because
+// a rewrite can keep a file's size and modification time. A blob is named by
+// its content digest, so its presence and size are enough.
 func (s codebuddyCBCSourceSet) Fingerprint(
 	ctx context.Context, source SourceRef,
 ) (SourceFingerprint, error) {
@@ -492,6 +494,21 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 	}
 	header := readCodeBuddyCBCHeader(ctx, path)
 	if root != "" {
+		blobs, err := codebuddyTranscriptBlobPaths(ctx, filepath.Dir(filepath.Clean(root)), path)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return SourceFingerprint{}, ctxErr
+			}
+			_, _ = io.WriteString(h, "blobs\x00unreadable\x00")
+		}
+		for _, blob := range blobs {
+			name := filepath.Base(blob)
+			if blobInfo, err := os.Stat(blob); err == nil {
+				_, _ = fmt.Fprintf(h, "blob\x00%s\x00%d\x00", name, blobInfo.Size())
+			} else {
+				_, _ = fmt.Fprintf(h, "blob\x00%s\x00absent\x00", name)
+			}
+		}
 		catalog, err := loadCodeBuddyCatalog(ctx, codebuddyCatalogPathForProjects(root))
 		if err == nil {
 			_, _ = fmt.Fprintf(h, "catalog\x00%s\x00",

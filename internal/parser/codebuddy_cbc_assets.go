@@ -223,6 +223,25 @@ func codebuddyTranscriptBlobIDs(ctx context.Context, path string) ([]string, err
 
 var codebuddyBlobIDRe = regexp.MustCompile(`"blob_id"\s*:\s*"([0-9a-f]{64})"`)
 
+// codebuddyTranscriptBlobPaths lists every blob-store path a transcript's
+// images can be read from: each referenced blob under each extension the
+// image reader tries. Their availability decides whether an image shows or
+// stays a placeholder, so the freshness checks follow these paths.
+func codebuddyTranscriptBlobPaths(ctx context.Context, home, path string) ([]string, error) {
+	ids, err := codebuddyTranscriptBlobIDs(ctx, path)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	exts := codebuddyBlobExtensions("")
+	paths := make([]string, 0, len(ids)*len(exts))
+	for _, id := range ids {
+		for _, ext := range exts {
+			paths = append(paths, filepath.Join(home, "blobs", id[:2], id+ext))
+		}
+	}
+	return paths, nil
+}
+
 func codebuddyDecodeDataURL(url string) ([]byte, string, bool) {
 	header, payload, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ",")
 	if !ok || !strings.HasSuffix(header, ";base64") {

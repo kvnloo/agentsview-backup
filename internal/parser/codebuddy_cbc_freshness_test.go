@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,4 +40,34 @@ func TestCodeBuddyCBCFingerprintFollowsSavedOutputContents(t *testing.T) {
 	assert.Equal(t, before.MTimeNS, after.MTimeNS)
 	assert.NotEqual(t, before.Hash, after.Hash,
 		"a same-size rewrite with the old modification time changes the fingerprint")
+}
+
+// An image missing from the blob store shows a placeholder. Both freshness
+// checks change when it appears, so an unchanged transcript is parsed again
+// and shows the image.
+func TestCodeBuddyCBCFreshnessFollowsReferencedBlobs(t *testing.T) {
+	home, project := cbcHome(t)
+	projects := filepath.Dir(project)
+	blob := strings.Repeat("ab", 32)
+	path := filepath.Join(project, "run-1.jsonl")
+	writeCBC(t, path, `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"image_blob_ref","blob_id":"`+blob+`","mime":"image/png"}]}`)
+	set := newCodeBuddyCBCSourceSet([]string{projects}, "")
+	source := set.sourceRef(projects, path)
+	probe, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	before, err := set.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	beforeStat := probe.ComputeMultiFileStatHash(path)
+	require.NotZero(t, beforeStat)
+
+	png, err := base64.StdEncoding.DecodeString(cbcPNG)
+	require.NoError(t, err)
+	stored := filepath.Join(home, "blobs", "ab", blob+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stored), 0o755))
+	require.NoError(t, os.WriteFile(stored, png, 0o600))
+	after, err := set.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash, "a restored image changes the fingerprint")
+	assert.NotEqual(t, beforeStat, probe.ComputeMultiFileStatHash(path),
+		"a restored image changes the stat hash")
 }

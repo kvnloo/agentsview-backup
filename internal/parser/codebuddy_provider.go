@@ -499,7 +499,8 @@ func (p *codebuddyProvider) SourceForReconciliation(
 
 // ComputeMultiFileStatHash digests the transcript, each tool-results
 // directory it reads (an agent also reads its parent's) and every saved
-// output in them, and the session's own catalog row, keyed by the session id
+// output in them, every blob-store path its images can be read from, present
+// or not, and the session's own catalog row, keyed by the session id
 // the transcript records, so a warm process can skip unchanged CBC sources
 // without hashing them, while a catalog write for another conversation leaves
 // this digest alone. The engine calls it on a rootless probe provider, so the
@@ -522,8 +523,15 @@ func (p *codebuddyProvider) ComputeMultiFileStatHash(path string) uint64 {
 	if err != nil {
 		return 0
 	}
+	// A missing image counts as zeros, so an image that appears later, such
+	// as one restored from a backup, changes the digest.
+	blobs, err := codebuddyTranscriptBlobPaths(context.Background(), filepath.Dir(root), path)
+	if err != nil {
+		return 0
+	}
 	stats := append([]string{path}, codebuddyCBCToolResultDirs(path)...)
-	files := fileStatTupleDigest(0xCB, append(stats, sidecars...)...)
+	stats = append(stats, sidecars...)
+	files := fileStatTupleDigest(0xCB, append(stats, blobs...)...)
 	if files == 0 {
 		return 0
 	}

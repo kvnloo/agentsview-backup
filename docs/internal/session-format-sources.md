@@ -5807,6 +5807,11 @@ schemas keep their existing ordering behavior.
     named `<id>`. The warm stat digest returns 0 for converted transcripts,
     because the engine computes it without the configured 4.x roots, so the
     full fingerprint decides their freshness.
+  - A transcript's fingerprint covers the contents of its saved tool outputs
+    and, for each `image_blob_ref`, whether `<home>/blobs/<prefix>/<sha>.<ext>`
+    exists and its size. The warm stat digest covers the same blob paths,
+    present or not. A blob-store change event selects no transcript, so an
+    image restored after the first import appears on the next ordinary sync.
   - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
     member name, otherwise the subagent preset name. The CLI writes that name
     to each subagent item's `providerData.agent`; main transcripts carry

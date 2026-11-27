@@ -59,7 +59,7 @@ func TestLoadSavedNoDaemonAutostart(t *testing.T) {
 	}{
 		{name: "missing"},
 		{name: "unrelated invalid setting", toml: "no_daemon_autostart = true\n[insights]\nmodel = 'incomplete'\n", want: true},
-		{name: "unrelated wrong type", toml: "no_daemon_autostart = true\nport = 'invalid'\n", want: true},
+		{name: "unrelated wrong type", toml: "no_daemon_autostart = true\nport = 'invalid'\n", wantErr: true},
 		{name: "wrong policy type", toml: "no_daemon_autostart = 'true'\n", wantErr: true},
 		{name: "invalid TOML", toml: "[broken\n", wantErr: true},
 		{name: "legacy JSON", legacy: `{"no_daemon_autostart":true}`, want: true},

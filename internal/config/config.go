@@ -1844,44 +1844,14 @@ func LoadReadOnlyAt(dataDir string) (Config, error) {
 	return loadReadOnlyFor(0, dataDir)
 }
 
-// LoadSavedNoDaemonAutostart reads the saved daemon policy without validating
-// unrelated settings or changing the data directory.
+// LoadSavedNoDaemonAutostart reads the saved daemon policy with local-client
+// validation and without changing the data directory.
 func LoadSavedNoDaemonAutostart(dataDir string) (bool, error) {
-	if dataDir == "" {
-		var err error
-		dataDir, err = ResolveDataDir()
-		if err != nil {
-			return false, err
-		}
-	}
-	dataDir, err := pathutil.ExpandHome(dataDir)
+	cfg, err := loadReadOnlyFor(ScopeLocal, dataDir)
 	if err != nil {
-		return false, fmt.Errorf("expanding data directory: %w", err)
-	}
-	data, err := os.ReadFile(filepath.Join(dataDir, "config.toml"))
-	if errors.Is(err, os.ErrNotExist) {
-		data, err = os.ReadFile(filepath.Join(dataDir, "config.json"))
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("reading config.json: %w", err)
-		}
-		converted, convertErr := legacyJSONToTOML(data)
-		if convertErr != nil {
-			return false, convertErr
-		}
-		data = []byte(converted)
-	} else if err != nil {
-		return false, fmt.Errorf("reading config: %w", err)
-	}
-	var saved struct {
-		NoDaemonAutostart bool `toml:"no_daemon_autostart"`
-	}
-	if _, err := toml.Decode(string(data), &saved); err != nil {
 		return false, err
 	}
-	return saved.NoDaemonAutostart, nil
+	return cfg.SavedNoDaemonAutostart, nil
 }
 
 func loadReadOnlyFor(scope ValidationScope, dataDir string) (Config, error) {

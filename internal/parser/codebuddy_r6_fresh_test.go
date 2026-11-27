@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -122,4 +123,44 @@ func TestCodeBuddyCBCBlobReferencesFollowInPlaceRewrite(t *testing.T) {
 	after, err := set.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash, "the newly referenced image arriving changes the fingerprint")
+}
+
+// An image unreadable during import shows a placeholder. Restoring its
+// permissions keeps its size, yet both freshness checks change, so the
+// conversation is parsed again and shows the image.
+func TestCodeBuddyCBCFreshnessFollowsRestoredBlobReadability(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not deny reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of mode")
+	}
+	home, project := cbcHome(t)
+	projects := filepath.Dir(project)
+	blob := strings.Repeat("ab", 32)
+	path := filepath.Join(project, "run-1.jsonl")
+	writeCBC(t, path, `{"id":"u1","type":"message","role":"user","timestamp":1000,"content":[{"type":"image_blob_ref","blob_id":"`+blob+`","mime":"image/png"}]}`)
+	png, err := base64.StdEncoding.DecodeString(cbcPNG)
+	require.NoError(t, err)
+	stored := filepath.Join(home, "blobs", "ab", blob+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stored), 0o755))
+	require.NoError(t, os.WriteFile(stored, png, 0o600))
+	require.NoError(t, os.Chmod(stored, 0))
+	t.Cleanup(func() { _ = os.Chmod(stored, 0o600) })
+
+	set := newCodeBuddyCBCSourceSet([]string{projects}, "")
+	source := set.sourceRef(projects, path)
+	probe, ok := newCodeBuddyProviderFactory(AgentDef{Type: AgentCodeBuddy}).NewProvider(ProviderConfig{}).(*codebuddyProvider)
+	require.True(t, ok)
+	before, err := set.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	beforeStat := probe.ComputeMultiFileStatHash(path)
+	require.NotZero(t, beforeStat)
+
+	require.NoError(t, os.Chmod(stored, 0o644))
+	after, err := set.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash, "a readable image changes the fingerprint")
+	assert.NotEqual(t, beforeStat, probe.ComputeMultiFileStatHash(path),
+		"restoring permissions moves the change time the stat hash records")
 }

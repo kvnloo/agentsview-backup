@@ -448,7 +448,7 @@ func (s codebuddyCBCSourceSet) pathFromSource(source SourceRef) (string, string,
 // images from, so a change to any of them reparses the session while
 // unrelated catalog writes leave it untouched. Output contents count because
 // a rewrite can keep a file's size and modification time. A blob is named by
-// its content digest, so its presence and size are enough.
+// its content digest, so its presence, size, and readability are enough.
 func (s codebuddyCBCSourceSet) Fingerprint(
 	ctx context.Context, source SourceRef,
 ) (SourceFingerprint, error) {
@@ -503,11 +503,19 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 		}
 		for _, blob := range blobs {
 			name := filepath.Base(blob)
-			if blobInfo, err := os.Stat(blob); err == nil {
-				_, _ = fmt.Fprintf(h, "blob\x00%s\x00%d\x00", name, blobInfo.Size())
-			} else {
+			blobInfo, err := os.Stat(blob)
+			if err != nil {
 				_, _ = fmt.Fprintf(h, "blob\x00%s\x00absent\x00", name)
+				continue
 			}
+			// An image unreadable at import stays a placeholder until a
+			// parse after its permissions are repaired, which keep its size.
+			readable := false
+			if f, err := os.Open(blob); err == nil {
+				readable = true
+				_ = f.Close()
+			}
+			_, _ = fmt.Fprintf(h, "blob\x00%s\x00%d\x00%t\x00", name, blobInfo.Size(), readable)
 		}
 		catalog, err := loadCodeBuddyCatalog(ctx, codebuddyCatalogPathForProjects(root))
 		if err == nil {

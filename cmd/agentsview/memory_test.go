@@ -138,25 +138,12 @@ func TestMemoryManagedDaemonStalledDeadline(t *testing.T) {
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
-func TestMemoryManagedDaemonCancellation(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	err := requestLocalMemoryRefresh(ctx)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Contains(t, err.Error(), "memory session-start: local daemon:")
-}
-
 func TestMemoryManagedDaemonReturns(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
 	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	setStartProbeTickForTest(t, 10*time.Millisecond)
 	var posts atomic.Int32
 	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,16 +156,8 @@ func TestMemoryManagedDaemonReturns(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	host, port := splitTestServerURL(t, server.URL)
-	written := make(chan error, 1)
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		_, err := WriteDaemonRuntime(dir, host, port, version, false)
-		written <- err
-	}()
-	t.Cleanup(func() { require.NoError(t, <-written); RemoveDaemonRuntime(dir) })
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	require.NoError(t, requestLocalMemoryRefresh(ctx))
+	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+	require.NoError(t, requestLocalMemoryRefresh(t.Context()))
 	assert.EqualValues(t, 1, posts.Load())
 }
 

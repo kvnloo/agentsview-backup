@@ -559,24 +559,34 @@ func TestManagedDaemonWaitDeadline(t *testing.T) {
 }
 
 func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	setTestVersion(t, "test")
-	setStartProbeTickForTest(t, 10*time.Millisecond)
-	host, port := testPingServer(t)
-	written := make(chan error, 1)
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		_, err := WriteDaemonRuntime(dir, host, port, "test", false)
-		written <- err
-	}()
-	t.Cleanup(func() { require.NoError(t, <-written); RemoveDaemonRuntime(dir) })
-	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, 2*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportHTTP, tr.Mode)
+	for _, tc := range []struct {
+		name   string
+		intent transportIntent
+	}{
+		{"read", transportIntentRead},
+		{"writable daemon", transportIntentWritableDaemon},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+			forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+			setTestVersion(t, "test")
+			setStartProbeTickForTest(t, 10*time.Millisecond)
+			host, port := testPingServer(t)
+			written := make(chan error, 1)
+			go func() {
+				time.Sleep(30 * time.Millisecond)
+				_, err := WriteDaemonRuntime(dir, host, port, "test", false)
+				written <- err
+			}()
+			t.Cleanup(func() { require.NoError(t, <-written); RemoveDaemonRuntime(dir) })
+			cfg := config.Config{DataDir: dir}
+			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 2*time.Second)
+			require.NoError(t, err)
+			assert.Equal(t, transportHTTP, tr.Mode)
+		})
+	}
 }
 
 func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
@@ -585,6 +595,7 @@ func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
 	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
 	cfg, err := config.LoadReadOnlyAt(dir)
 	require.NoError(t, err)
+	forbidStartBackgroundServeForTransport(t, "saved policy must suppress daemon start")
 	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)

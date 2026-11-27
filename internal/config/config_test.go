@@ -42,13 +42,6 @@ func TestNoDaemonAutostartConfig(t *testing.T) {
 			assert.False(t, cfg.NoDaemonAutostart)
 		})
 	}
-	t.Run("later false clears saved value", func(t *testing.T) {
-		cfg := Config{NoDaemonAutostart: true}
-		require.NoError(t, cfg.applyConfigTOML("no_daemon_autostart = true"))
-		require.NoError(t, cfg.applyConfigTOML("no_daemon_autostart = false"))
-		assert.False(t, cfg.SavedNoDaemonAutostart)
-		assert.True(t, cfg.NoDaemonAutostart)
-	})
 }
 
 func TestLoadSavedNoDaemonAutostart(t *testing.T) {

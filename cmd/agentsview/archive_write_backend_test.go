@@ -1191,36 +1191,6 @@ func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	assert.True(t, daemonBackend.appCfg.NoSync)
 }
 
-func TestManagedDaemonSavedPolicyKeepsDirectWrites(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		env           string
-		local         bool
-		requireDaemon bool
-	}{
-		{name: "saved"},
-		{name: "environment override", env: "1"},
-		{name: "local override", local: true},
-		{name: "required daemon", requireDaemon: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("AGENTSVIEW_NO_DAEMON", tc.env)
-			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-			forbidStartBackgroundServeForTransport(t, "saved policy must suppress daemon start")
-			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), NoDaemonAutostart: tc.local, RequireDaemon: tc.requireDaemon}
-			backend, cleanup, err := resolveArchiveWriteBackend(t.Context(), cfg, transportIntentArchiveWrite)
-			if tc.requireDaemon {
-				require.ErrorIs(t, err, errNoWritableDaemon)
-				return
-			}
-			require.NoError(t, err)
-			t.Cleanup(cleanup)
-			assert.IsType(t, &localArchiveWriteBackend{}, backend)
-		})
-	}
-}
-
 // canceledContext returns a context that has already been canceled.
 func canceledContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())

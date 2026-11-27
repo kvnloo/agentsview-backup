@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -440,10 +441,12 @@ func (s codebuddyCBCSourceSet) pathFromSource(source SourceRef) (string, string,
 	return "", "", false
 }
 
-// Fingerprint hashes the transcript, its persisted tool outputs, its catalog
-// row, and, for a conversation converted from 4.x, the 4.x directory it reads
-// usage and images from, so a change to any of them reparses the session
-// while unrelated catalog writes leave it untouched.
+// Fingerprint hashes the transcript, the contents of its persisted tool
+// outputs, its catalog row, and, for a conversation converted from 4.x, the
+// 4.x directory it reads usage and images from, so a change to any of them
+// reparses the session while unrelated catalog writes leave it untouched.
+// Output contents count because a rewrite can keep a file's size and
+// modification time.
 func (s codebuddyCBCSourceSet) Fingerprint(
 	ctx context.Context, source SourceRef,
 ) (SourceFingerprint, error) {
@@ -473,8 +476,17 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 			continue
 		}
 		rel, _ := filepath.Rel(filepath.Dir(path), sidecar)
-		_, _ = fmt.Fprintf(h, "sidecar\x00%s\x00%d\x00%d\x00",
-			filepath.ToSlash(rel), sidecarInfo.Size(), sidecarInfo.ModTime().UnixNano())
+		content, err := codebuddySidecarContentHash(ctx, sidecar, sidecarInfo)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return SourceFingerprint{}, ctxErr
+			}
+			// The parse keeps an unreadable output's placeholder; the
+			// output becoming readable changes this entry.
+			content = "unreadable"
+		}
+		_, _ = fmt.Fprintf(h, "sidecar\x00%s\x00%d\x00%d\x00%s\x00",
+			filepath.ToSlash(rel), sidecarInfo.Size(), sidecarInfo.ModTime().UnixNano(), content)
 		size += sidecarInfo.Size()
 		mtime = max(mtime, sidecarInfo.ModTime().UnixNano())
 	}
@@ -502,6 +514,56 @@ func (s codebuddyCBCSourceSet) Fingerprint(
 		Device:  device,
 		Hash:    hex.EncodeToString(h.Sum(nil)),
 	}, nil
+}
+
+// codebuddySidecarHashes remembers each saved output's content digest under
+// its size, modification time, change time, and inode. Every rewrite moves
+// the change time, even one that restores the modification time, so a
+// matching entry proves the contents unchanged without reading them again.
+// An agent transcript also reads its parent's outputs, so one session's
+// outputs are fingerprinted once per transcript of the session. Without a
+// change time or inode the output is read every time.
+var codebuddySidecarHashes = struct {
+	sync.Mutex
+	byPath map[string]codebuddySidecarHash
+}{byPath: make(map[string]codebuddySidecarHash)}
+
+type codebuddySidecarHash struct {
+	size, mtime, ctime int64
+	inode              uint64
+	hash               string
+}
+
+func codebuddySidecarContentHash(
+	ctx context.Context, path string, info os.FileInfo,
+) (string, error) {
+	ctime, verified := codexIndexChangeTime(path, info)
+	inode, _ := sourceFileIdentityForPath(path, info)
+	key := codebuddySidecarHash{
+		size: info.Size(), mtime: info.ModTime().UnixNano(), ctime: ctime, inode: inode,
+	}
+	cacheable := verified && inode != 0
+	if cacheable {
+		codebuddySidecarHashes.Lock()
+		cached, ok := codebuddySidecarHashes.byPath[path]
+		codebuddySidecarHashes.Unlock()
+		if ok && cached.size == key.size && cached.mtime == key.mtime &&
+			cached.ctime == key.ctime && cached.inode == key.inode {
+			return cached.hash, nil
+		}
+	}
+	hash, err := hashJSONLSourceFileContext(ctx, path)
+	if err != nil || !cacheable {
+		return hash, err
+	}
+	key.hash = hash
+	codebuddySidecarHashes.Lock()
+	if len(codebuddySidecarHashes.byPath) >= 1<<16 {
+		clear(codebuddySidecarHashes.byPath)
+	}
+	codebuddySidecarHashes.byPath[path] = key
+	codebuddySidecarHashes.Unlock()
+	return hash, nil
 }
 
 // codebuddyCBCSidecarFiles lists the persisted tool outputs a transcript can

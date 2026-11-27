@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,12 +110,11 @@ type codebuddyCBCHeader struct {
 }
 
 // The header read stops at the first line carrying a sessionId, which
-// producers write on the first line, or at the first conversation item. These
-// bounds keep a transcript without either from being read in full.
-const (
-	codebuddyCBCHeaderLines = 64
-	codebuddyCBCHeaderBytes = 1 << 20
-)
+// producers write on the first line, or at the first conversation item. The
+// line bound keeps a transcript without either from being read in full. Each
+// line may be as long as a full parse accepts, so a first item carrying a
+// large pasted text still yields its session id.
+const codebuddyCBCHeaderLines = 64
 
 // readCodeBuddyCBCHeader reads the header of the main transcript at path. A
 // subagent transcript, whose catalog key and archive identity both come from
@@ -131,7 +129,7 @@ func readCodeBuddyCBCHeader(ctx context.Context, path string) codebuddyCBCHeader
 		return h
 	}
 	defer f.Close()
-	lr := newLineReaderContext(ctx, io.LimitReader(f, codebuddyCBCHeaderBytes), codebuddyCBCHeaderBytes)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	for range codebuddyCBCHeaderLines {
 		line, ok := lr.nextBytes()

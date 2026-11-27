@@ -1585,11 +1585,13 @@ type ParsedSession struct {
 	SourceVersion      string
 	GroupKey           string `json:"group_key,omitempty"`
 	KeepStoredGroupKey bool   `json:"keep_stored_group_key,omitempty"`
-	// LegacyCompanionMissing reports a CodeBuddy conversation converted
-	// from 4.x whose 4.x directory could not be read. Sync keeps the
-	// archived request totals and images that only that directory
-	// supplied; once the directory reads again, its figures win.
-	LegacyCompanionMissing bool
+	// LegacyCompanionIncomplete reports a CodeBuddy conversation converted
+	// from 4.x whose 4.x directory could not be read in full: the
+	// directory or its manifest is missing or not a message list, a listed
+	// assistant message cannot be read, or a 4.x image cannot be read. Sync
+	// keeps the archived request totals and images that only that
+	// directory supplied; what the directory still reads wins.
+	LegacyCompanionIncomplete bool
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback

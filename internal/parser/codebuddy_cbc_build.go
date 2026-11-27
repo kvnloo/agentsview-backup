@@ -44,6 +44,9 @@ type codebuddyCBCBuilt struct {
 	subagentCalls map[string]string
 	// legacyClaimed lists the legacyUsage keys this path attached.
 	legacyClaimed map[string]bool
+	// legacyImageMissing reports a 4.x image, codebuddy-asset://, that
+	// could not be read.
+	legacyImageMissing bool
 }
 
 // buildCodeBuddyCBCMessages converts replayed transcript items into parsed
@@ -483,6 +486,9 @@ func (b *codebuddyCBCBuilder) imageMarkdown(refs []codebuddyImageRef) string {
 				parts = append(parts, "![image]("+asset+")")
 				continue
 			}
+		}
+		if strings.HasPrefix(ref.assetURI, "codebuddy-asset://") {
+			b.built.legacyImageMissing = true
 		}
 		label := firstNonEmptyJSONLString(ref.filename, "image")
 		parts = append(parts, "[image unavailable: "+label+"]")

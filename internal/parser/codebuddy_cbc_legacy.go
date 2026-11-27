@@ -25,8 +25,10 @@ import (
 // codebuddyLegacyCompanion is what a converted transcript still needs from
 // its 4.x conversation directory.
 type codebuddyLegacyCompanion struct {
-	// found reports that the 4.x directory and its manifest were read.
-	found bool
+	// complete reports that the manifest read as a message list and that
+	// every assistant message file it lists, which may hold request totals,
+	// was read.
+	complete bool
 	// assetsDir holds the images codebuddy-asset://assets/<name> names.
 	assetsDir string
 	// usage holds one row per 4.x request, keyed by the id of the 4.x
@@ -134,7 +136,8 @@ func codebuddyLegacySessionDir(ctx context.Context, roots []string, cwd, id stri
 
 // loadCodeBuddyLegacyCompanion reads the request totals and the asset
 // directory of a converted conversation. A missing directory returns an
-// empty companion.
+// empty companion, and a manifest that is not a message list or a listed
+// assistant message that cannot be read returns one that is not complete.
 func loadCodeBuddyLegacyCompanion(
 	ctx context.Context, roots []string, cwd, id string,
 ) codebuddyLegacyCompanion {
@@ -147,17 +150,22 @@ func loadCodeBuddyLegacyCompanion(
 		out.assetsDir = filepath.Join(dir, "assets")
 	}
 	index, err := os.ReadFile(filepath.Join(dir, "index.json"))
-	if err != nil {
+	if err != nil || !gjson.ValidBytes(index) {
 		return out
 	}
-	out.found = true
+	manifest := gjson.ParseBytes(index)
+	if !manifest.IsObject() || !manifest.Get("messages").IsArray() {
+		// The 4.x reader rejects such a manifest too.
+		return out
+	}
+	out.complete = true
 	type keyed struct {
 		id string
 		ts time.Time
 	}
 	// Each assistant message carrying a snapshot records its own totals.
 	latest := map[string]keyed{}
-	gjson.GetBytes(index, "messages").ForEach(func(_, ref gjson.Result) bool {
+	manifest.Get("messages").ForEach(func(_, ref gjson.Result) bool {
 		if ctx.Err() != nil {
 			// The caller's next context check reports the cancellation.
 			return false
@@ -168,6 +176,7 @@ func loadCodeBuddyLegacyCompanion(
 		}
 		body, err := os.ReadFile(filepath.Join(dir, "messages", msgID+".json"))
 		if err != nil || !gjson.ValidBytes(body) {
+			out.complete = false
 			return true
 		}
 		root := gjson.ParseBytes(body)

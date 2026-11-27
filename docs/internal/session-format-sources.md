@@ -5807,12 +5807,16 @@ schemas keep their existing ordering behavior.
     named `<id>`. The warm stat digest returns 0 for converted transcripts,
     because the engine computes it without the configured 4.x roots, so the
     full fingerprint decides their freshness.
-  - When a converted transcript's 4.x directory is missing, sync keeps what
-    the archived copy read there: each `cb4:` request total the parse lacks,
-    as a hidden usage row, and each saved image link that the parse shows as
-    unavailable, matched by message source UUID and image position. Once the
-    directory reads again, its totals, including explicit zeros, and its
-    images replace the archived ones.
+  - When a converted transcript's 4.x directory does not read in full, sync
+    keeps what the archived copy read there: each `cb4:` request total the
+    parse lacks, as a hidden usage row, and each saved image link that the
+    parse shows as unavailable, matched by message source UUID and image
+    position. The directory does not read in full when it is missing, its
+    `index.json` is missing or is not an object with a `messages` array
+    (the check the 4.x reader applies), an assistant message file it lists
+    is missing or invalid, or a `codebuddy-asset://` image cannot be read.
+    Totals and images the directory still reads, including explicit zeros,
+    replace the archived ones.
   - A transcript's fingerprint covers the contents of its saved tool outputs
     and, for each `image_blob_ref`, whether `<home>/blobs/<prefix>/<sha>.<ext>`
     exists and its size. The warm stat digest covers the same blob paths,

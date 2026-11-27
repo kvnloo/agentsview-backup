@@ -192,7 +192,7 @@ func ReconcileProviderHistory(
 		result, err := reconcileClaudePersistedToolResults(
 			ctx, candidate, *prior, options, result,
 		)
-		if err != nil || !candidate.Parsed.Session.LegacyCompanionMissing {
+		if err != nil || !candidate.Parsed.Session.LegacyCompanionIncomplete {
 			return result, err
 		}
 		return keepCodeBuddyLegacyCompanionData(ctx, *prior, result)

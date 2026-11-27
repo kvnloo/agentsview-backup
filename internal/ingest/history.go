@@ -2,7 +2,10 @@ package ingest
 
 import (
 	"context"
+	"regexp"
 	"slices"
+	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -186,9 +189,13 @@ func ReconcileProviderHistory(
 	// candidate can match both predicates; the file path (not the agent
 	// alone) decides which family this candidate belongs to.
 	if RestoresPersistedToolResults(agent, candidate.Parsed.Session.File.Path) {
-		return reconcileClaudePersistedToolResults(
+		result, err := reconcileClaudePersistedToolResults(
 			ctx, candidate, *prior, options, result,
 		)
+		if err != nil || !candidate.Parsed.Session.LegacyCompanionMissing {
+			return result, err
+		}
+		return keepCodeBuddyLegacyCompanionData(ctx, *prior, result)
 	}
 	if IsOpenCodeFormatStorageAgent(agent) {
 		preserve, err := shouldPreserveOpenCodeFormatArchive(
@@ -267,6 +274,157 @@ type toolResultEventIdentity struct {
 	toolUseID string
 	source    string
 	timestamp string
+}
+
+// keepCodeBuddyLegacyCompanionData keeps what the archived copy of a
+// converted CodeBuddy conversation read from its 4.x directory, which the
+// parse could not read: the request totals, under their cb4: identities,
+// and the image links that the parse shows as unavailable. A request total
+// the parse already carries, such as one the converter copied into the
+// transcript, wins. Once the directory reads again the parser stops asking
+// for this, so its totals, including zero totals, and its images win.
+func keepCodeBuddyLegacyCompanionData(
+	ctx context.Context, prior PriorSession, result HistoryResult,
+) (HistoryResult, error) {
+	if err := prior.loadMessages(ctx); err != nil {
+		return HistoryResult{}, err
+	}
+	candidate := result.Candidate
+	messages := slices.Clone(candidate.Messages)
+	usage := keepCodeBuddyLegacyUsage(&messages, prior.Messages, candidate.Session.ID)
+	images := keepCodeBuddyLegacyImages(messages, prior.Messages)
+	if !usage && !images {
+		return result, ctx.Err()
+	}
+	candidate.Messages = messages
+	if usage {
+		if err := ApplySessionMessageDerivedFieldsContext(
+			ctx, &candidate.Session, messages,
+			candidate.Parsed.Session.CountsAuthoritative,
+		); err != nil {
+			return HistoryResult{}, err
+		}
+		if err := ApplySessionTokenTotalsFromMessagesContext(
+			ctx, &candidate.Session, messages,
+		); err != nil {
+			return HistoryResult{}, err
+		}
+	}
+	result.Candidate = candidate
+	result.Action = HistoryMerge
+	result.PriorContributed = true
+	return result, ctx.Err()
+}
+
+// keepCodeBuddyLegacyUsage carries each archived 4.x request total whose
+// identity the parse lacks as a hidden usage row at its place in time, as
+// the parser adds a total whose reply the transcript no longer holds, so
+// the request still counts once.
+func keepCodeBuddyLegacyUsage(
+	messages *[]db.Message, archived []db.Message, sessionID string,
+) bool {
+	present := make(map[string]bool)
+	for _, m := range *messages {
+		present[m.SourceUUID] = true
+	}
+	changed := false
+	for _, old := range archived {
+		hasContext, hasOutput := old.TokenPresence()
+		if !strings.HasPrefix(old.SourceUUID, "cb4:") || present[old.SourceUUID] ||
+			(!hasContext && !hasOutput) {
+			continue
+		}
+		present[old.SourceUUID] = true
+		changed = true
+		row := db.Message{
+			SessionID: sessionID, Role: string(parser.RoleAssistant),
+			IsSystem: true, Timestamp: old.Timestamp,
+			Model: old.Model, TokenUsage: old.TokenUsage,
+			ContextTokens: old.ContextTokens, HasContextTokens: hasContext,
+			OutputTokens: old.OutputTokens, HasOutputTokens: hasOutput,
+			SourceUUID: old.SourceUUID,
+		}
+		at := len(*messages)
+		if ts, err := time.Parse(time.RFC3339Nano, old.Timestamp); err == nil {
+			if i := slices.IndexFunc(*messages, func(m db.Message) bool {
+				t, err := time.Parse(time.RFC3339Nano, m.Timestamp)
+				return err == nil && t.After(ts)
+			}); i >= 0 {
+				at = i
+			}
+		}
+		*messages = slices.Insert(*messages, at, row)
+	}
+	if changed {
+		for i := range *messages {
+			(*messages)[i].Ordinal = i
+		}
+	}
+	return changed
+}
+
+var codebuddyImageTokenRe = regexp.MustCompile(
+	`!\[image\]\(asset://[^)\s]+\)|\[image unavailable: [^\]\n]*\]`,
+)
+
+// keepCodeBuddyLegacyImages puts back the archived image links of messages
+// that now show an image as unavailable. Images match by message identity
+// and position, and only when both copies list the same number of images.
+func keepCodeBuddyLegacyImages(messages []db.Message, archived []db.Message) bool {
+	saved := make(map[string][]int)
+	for i, m := range archived {
+		if m.SourceUUID != "" && strings.Contains(m.Content, "](asset://") {
+			saved[m.SourceUUID] = append(saved[m.SourceUUID], i)
+		}
+	}
+	counts := make(map[string]int)
+	for _, m := range messages {
+		counts[m.SourceUUID]++
+	}
+	changed := false
+	for i := range messages {
+		m := &messages[i]
+		olds := saved[m.SourceUUID]
+		if m.SourceUUID == "" || counts[m.SourceUUID] != 1 || len(olds) != 1 ||
+			!strings.Contains(m.Content, "[image unavailable: ") {
+			continue
+		}
+		links := codebuddyImageTokenRe.FindAllString(archived[olds[0]].Content, -1)
+		content, ok := restoreCodeBuddyImageLinks(m.Content, links)
+		if !ok {
+			continue
+		}
+		if m.DialogueText != nil && *m.DialogueText == m.Content {
+			// A prompt's dialogue is its content, images included.
+			m.DialogueText = &content
+		}
+		m.Content, m.ContentLength = content, len(content)
+		changed = true
+	}
+	return changed
+}
+
+// restoreCodeBuddyImageLinks replaces each unavailable image in text with
+// the archived link at the same position.
+func restoreCodeBuddyImageLinks(text string, links []string) (string, bool) {
+	tokens := codebuddyImageTokenRe.FindAllStringIndex(text, -1)
+	if len(tokens) != len(links) {
+		return text, false
+	}
+	var b strings.Builder
+	last, changed := 0, false
+	for i, loc := range tokens {
+		b.WriteString(text[last:loc[0]])
+		token := text[loc[0]:loc[1]]
+		if strings.HasPrefix(token, "[image unavailable: ") &&
+			strings.HasPrefix(links[i], "![image](asset://") {
+			token, changed = links[i], true
+		}
+		b.WriteString(token)
+		last = loc[1]
+	}
+	b.WriteString(text[last:])
+	return b.String(), changed
 }
 
 // reconcileClaudePersistedToolResults restores, from the archived session,

@@ -25,6 +25,8 @@ import (
 // codebuddyLegacyCompanion is what a converted transcript still needs from
 // its 4.x conversation directory.
 type codebuddyLegacyCompanion struct {
+	// found reports that the 4.x directory and its manifest were read.
+	found bool
 	// assetsDir holds the images codebuddy-asset://assets/<name> names.
 	assetsDir string
 	// usage holds one row per 4.x request, keyed by the id of the 4.x
@@ -148,6 +150,7 @@ func loadCodeBuddyLegacyCompanion(
 	if err != nil {
 		return out
 	}
+	out.found = true
 	type keyed struct {
 		id string
 		ts time.Time

@@ -69,8 +69,10 @@ func parseCodeBuddyCBCFile(
 		ident.runtimeID = t.sessionID
 	}
 	var legacyOrder []string
-	if t.converted && !ident.subagent && len(in.legacyRoots) > 0 {
+	companionMissing := t.converted && !ident.subagent
+	if companionMissing && len(in.legacyRoots) > 0 {
 		companion := loadCodeBuddyLegacyCompanion(ctx, in.legacyRoots, t.cwd, ident.rawID)
+		companionMissing = !companion.found
 		in.opts.legacyUsage = codebuddyLegacyUsageMissingFrom(companion.usage, t.items)
 		legacyOrder = companion.order
 		if blobs, ok := in.opts.assets.(codebuddyBlobAssets); ok {
@@ -111,6 +113,9 @@ func parseCodeBuddyCBCFile(
 		MalformedLines: t.malformed,
 		IsTruncated:    t.truncated,
 		File:           codebuddyCBCFileInfo(in.path),
+		// Without its 4.x directory a converted conversation lacks the
+		// request totals and pasted images only that directory holds.
+		LegacyCompanionMissing: companionMissing,
 	}
 	if !ident.subagent {
 		base.SourceSessionID = ident.runtimeID

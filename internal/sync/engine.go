@@ -11983,7 +11983,10 @@ func (e *Engine) reconcileProviderHistory(
 		agent, candidate.Parsed.Session.File.Path,
 	) {
 		unresolved := hasUnresolvedPersistedToolResult(candidate.Parsed.Messages)
-		if (prior == nil || len(prior.Messages) == 0) && unresolved {
+		// A converted CodeBuddy conversation whose 4.x directory is gone
+		// keeps the archived request totals and images it read there.
+		companionMissing := candidate.Parsed.Session.LegacyCompanionMissing
+		if (prior == nil || len(prior.Messages) == 0) && (unresolved || companionMissing) {
 			store := e.historyStore()
 			stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
 			if err != nil {

@@ -849,34 +849,28 @@ of writing directly.
 When you pass `--no-start-daemon`, `pg push --watch` and
 `clickhouse push --watch` require an existing writable daemon.
 
-To disable daemon auto-start for one shell or script, set
-`AGENTSVIEW_NO_DAEMON=1`. To disable it for every command and agent hook that
-uses the data directory, including agent sessions already running, set
-`no_daemon_autostart = true` in that directory's `config.toml`. When the saved
-setting is on, reads and `memory session-start --hook` wait up to about two
-seconds for a server. Commands that need a daemon then report an error if it
-doesn't return. Direct write commands still use their local path.
+To disable daemon auto-start, set `AGENTSVIEW_NO_DAEMON=1`. Commands that
+require the daemon refuse to run while it is disabled. Direct write commands
+acquire the local write-owner lock before opening SQLite and refuse if another
+process holds that lock. If `agentsview daemon status` shows a daemon, run
+`agentsview daemon stop`; otherwise find the agentsview process holding the
+lock file and wait for it to finish or stop it. Auto-start for MCP and CLI
+commands that start a server on their own reports the lock holder the same way
+instead of launching a server that could not open the archive, while
+`daemon start` and `serve --background` report the child's failure as before.
 
-If systemd, launchd, or another service manager runs `agentsview serve` in the
-foreground, whatever installs or updates the service should write
-`no_daemon_autostart = true` before it stops the running server, and keep the
-key across updates. Without it, an agent hook that runs while the service
-restarts can start a background server that holds the data directory, and the
-service then fails on every restart. Remove the key if you stop using the
-service.
+To disable daemon auto-start for every command and agent hook that uses a data
+directory, including agent sessions already running, set
+`no_daemon_autostart = true` in that directory's `config.toml`. Reads and
+`memory session-start --hook` then wait up to about two seconds for a server;
+direct write commands still use their local path. If a service manager runs
+`agentsview serve` in the foreground, whatever installs or updates the service
+should write the key before it stops the server, keep it across updates, and
+remove it when the service is retired.
 
 ```toml
 no_daemon_autostart = true
 ```
-
-Direct write commands acquire the local write-owner lock before opening SQLite
-and refuse if another process holds that lock. If `agentsview daemon status`
-shows a daemon, run `agentsview daemon stop`; otherwise find the agentsview
-process holding the lock file and wait for it to finish or stop it. Auto-start
-for MCP and CLI commands that start a server on their own reports the lock
-holder the same way instead of launching a server that could not open the
-archive, while `daemon start` and `serve --background` report the child's
-failure as before.
 
 ______________________________________________________________________
 

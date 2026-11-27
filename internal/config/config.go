@@ -1300,7 +1300,8 @@ type Config struct {
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
 	DeploymentEmbeddings *VectorEmbeddingsServerConfig `json:"-" toml:"-"`
-	// NoDaemonAutostart suppresses daemon autostart for this invocation only.
+	// NoDaemonAutostart suppresses daemon autostart for this invocation
+	// only; pg push --embed sets it to keep the archive writer local.
 	NoDaemonAutostart bool `json:"-" toml:"-"`
 	// SavedNoDaemonAutostart is the autostart policy from config.toml.
 	SavedNoDaemonAutostart bool `json:"-" toml:"-"`

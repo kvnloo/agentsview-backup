@@ -263,7 +263,8 @@ func ensureTransportContext(
 		}
 		return saved, nil
 	}
-	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) && waitTimeout <= 0 {
+	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
+		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
 	managedWait := false
@@ -332,7 +333,7 @@ func ensureTransportContext(
 				if intent == transportIntentRead {
 					return transport{}, errors.New(
 						"daemon restart required: running daemon version differs from this client; " +
-							"run `agentsview daemon restart`; to allow automatic replacement, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml",
+							"run `agentsview daemon restart` or unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml to allow automatic replacement",
 					)
 				}
 				return tr, nil
@@ -378,10 +379,9 @@ func ensureTransportContext(
 			return transport{}, cliUnavailableError(errors.New(
 				"daemon autostart is disabled; direct SQLite reads are "+
 					"not supported for this command. Start a daemon with "+
-					"`agentsview daemon start`, or unset the "+
-					"AGENTSVIEW_NO_DAEMON environment variable and remove "+
-					"no_daemon_autostart from config.toml to start one automatically",
-			), "run `agentsview daemon start`, then retry; to start a daemon automatically, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml")
+					"`agentsview daemon start` or unset "+
+					"AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml",
+			), "run `agentsview daemon start`, then retry; unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml only if this command should start a daemon automatically")
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {

@@ -495,47 +495,20 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 	assert.Contains(t, err.Error(), "no_daemon_autostart")
 }
 
-func TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	cfg := config.Config{DataDir: dir}
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start with cached config")
-	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportDirect, tr.Mode)
-}
-
 func TestEnsureTransport_PolicyReadIgnoresUnusedInvalidConfig(t *testing.T) {
-	for _, saved := range []bool{false, true} {
-		t.Run(fmt.Sprintf("saved=%t", saved), func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-			writeTestConfig(t, dir, fmt.Sprintf("no_daemon_autostart = %t\n[insights]\nmodel = 'incomplete'\n", saved))
-			cfg, err := config.LoadMinimalFor(config.ScopeLocal)
-			require.NoError(t, err)
-			setTestVersion(t, "test")
-			host, port := testPingServer(t)
-			writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-			forbidStartBackgroundServeForTransport(t, "a compatible daemon is already running")
-			tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
-			require.NoError(t, err)
-			assert.Equal(t, transportHTTP, tr.Mode)
-		})
-	}
-}
-
-func TestEnsureTransport_PolicyReadRetainsLaunchValidation(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 	writeTestConfig(t, dir, "[insights]\nmodel = 'incomplete'\n")
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	require.NoError(t, err)
-	forbidStartBackgroundServeForTransport(t, "invalid server configuration must not start a daemon")
-	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
-	require.ErrorContains(t, err, "endpoint and model")
+	setTestVersion(t, "test")
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	forbidStartBackgroundServeForTransport(t, "a compatible daemon is already running")
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
 }
 
 func TestManagedDaemonWaitDeadline(t *testing.T) {

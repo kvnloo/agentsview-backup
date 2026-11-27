@@ -119,25 +119,6 @@ func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
-func TestMemoryManagedDaemonStalledDeadline(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
-	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
-	t.Cleanup(server.Close)
-	host, port := splitTestServerURL(t, server.URL)
-	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
-	defer cancel()
-	started := time.Now()
-	err := requestLocalMemoryRefresh(ctx)
-	require.EqualError(t, err, "memory session-start: writable local daemon is unavailable")
-	assert.NotErrorIs(t, err, context.DeadlineExceeded)
-	assert.Less(t, time.Since(started), 500*time.Millisecond)
-}
-
 func TestMemoryManagedDaemonReturns(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)

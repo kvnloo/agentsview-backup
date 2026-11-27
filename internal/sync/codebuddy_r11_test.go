@@ -100,3 +100,35 @@ func TestSyncCodeBuddyConvertedKeepsImageAfterAssetsDeleted(t *testing.T) {
 	assert.NotContains(t, got, "[image unavailable")
 	assert.Equal(t, 40, cbcDailyTotals(t, database).OutputTokens)
 }
+
+// Rewinding an image-bearing turn into a branch after the 4.x folder is gone
+// shows, in the new branch, the image the conversation archived.
+func TestSyncCodeBuddyConvertedRewindKeepsArchivedImage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sync func(*testing.T, *Engine, string)
+	}{
+		{"full sync", func(t *testing.T, e *Engine, _ string) { e.SyncAll(t.Context(), nil) }},
+		{"changed path", func(_ *testing.T, e *Engine, path string) { e.SyncPaths([]string{path}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			convDir, transcript, engine, link := cbcConvertedImageSync(t, database, map[string]int{"a1": 40})
+			require.NoError(t, os.RemoveAll(convDir))
+			engine.SyncAll(t.Context(), nil)
+			require.Contains(t, cbcFirstContent(t, database, "codebuddy:conv1"), link)
+
+			writeCBCSync(t, transcript, append(cbcConvertedImageTurn,
+				`{"id":"n1","type":"resend-fork-notice","timestamp":1767225604000}`,
+				`{"id":"u2","type":"message","role":"user","timestamp":1767225605000,"content":[{"type":"input_text","text":"again"}]}`,
+				`{"id":"a2","parentId":"u2","type":"message","role":"assistant","timestamp":1767225606000,"content":[{"type":"output_text","text":"ok"}]}`,
+			)...)
+			tc.sync(t, engine, transcript)
+			branch := cbcFirstContent(t, database, "codebuddy:conv1-u1")
+			assert.Contains(t, branch, link, "the branch shows the archived image")
+			assert.NotContains(t, branch, "[image unavailable")
+			assert.Equal(t, 40, cbcDailyTotals(t, database).OutputTokens,
+				"the request still counts once")
+		})
+	}
+}

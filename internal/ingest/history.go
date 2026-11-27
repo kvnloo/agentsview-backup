@@ -31,6 +31,8 @@ type PriorSession struct {
 	// from the same source, such as a CodeBuddy conversation and its rewound
 	// branches. Persisted tool-result restore uses it only for an identity
 	// the session's own rows lack, and only when every other session agrees.
+	// It also holds the image links those sessions archived for a converted
+	// CodeBuddy conversation's 4.x images, used the same way.
 	SourceToolResults *SourceToolResults
 	// LoadMessages optionally supplies retained rows only when a history policy
 	// needs them. It takes precedence over Messages; callers own read errors
@@ -43,15 +45,24 @@ type PriorSession struct {
 // CodeBuddy rewind moves a call from its conversation to a branch, so the
 // branch's own archive lacks the output the conversation saved. Build one
 // index per source and share it across that source's sessions; each lookup
-// skips the session being reconciled.
+// skips the session being reconciled. It indexes, the same way, the image
+// links archived for messages that now show a 4.x image as unavailable.
 type SourceToolResults struct {
 	wanted map[toolResultEventIdentity]bool
 	saved  map[toolResultEventIdentity][]savedToolResult
+	// wantedImages and images key image links by message source UUID.
+	wantedImages map[string]bool
+	images       map[string][]savedImageLinks
 }
 
 type savedToolResult struct {
 	sessionID string
 	event     db.ToolResultEvent
+}
+
+type savedImageLinks struct {
+	sessionID string
+	links     []string
 }
 
 // Want requests the tool results that messages flag as unresolved persisted
@@ -65,15 +76,50 @@ func (s *SourceToolResults) Want(messages []parser.ParsedMessage) {
 	}
 }
 
-// Wants reports whether any tool result was requested.
-func (s *SourceToolResults) Wants() bool {
-	return len(s.wanted) > 0
+// WantImages requests the archived image links of the messages that show an
+// image as unavailable. Call it only for a converted CodeBuddy conversation
+// whose 4.x directory no longer reads in full.
+func (s *SourceToolResults) WantImages(messages []parser.ParsedMessage) {
+	for _, m := range messages {
+		if m.SourceUUID == "" || !strings.Contains(m.Content, codebuddyImageUnavailable) {
+			continue
+		}
+		if s.wantedImages == nil {
+			s.wantedImages = make(map[string]bool)
+		}
+		s.wantedImages[m.SourceUUID] = true
+	}
 }
 
-// Add keeps the requested tool results archived in one session's rows.
-// Other rows are not retained, so a caller can read sessions one at a time.
+// HasUnavailableImage reports whether any message shows an image as
+// unavailable.
+func HasUnavailableImage(messages []parser.ParsedMessage) bool {
+	return slices.ContainsFunc(messages, func(m parser.ParsedMessage) bool {
+		return strings.Contains(m.Content, codebuddyImageUnavailable)
+	})
+}
+
+// Wants reports whether any tool result or image link was requested.
+func (s *SourceToolResults) Wants() bool {
+	return len(s.wanted) > 0 || len(s.wantedImages) > 0
+}
+
+// Add keeps the requested tool results and image links archived in one
+// session's rows. Other rows are not retained, so a caller can read sessions
+// one at a time.
 func (s *SourceToolResults) Add(sessionID string, messages []db.Message) {
 	for _, message := range messages {
+		if s.wantedImages[message.SourceUUID] &&
+			strings.Contains(message.Content, codebuddyImageLink) {
+			if s.images == nil {
+				s.images = make(map[string][]savedImageLinks)
+			}
+			s.images[message.SourceUUID] = append(s.images[message.SourceUUID],
+				savedImageLinks{
+					sessionID: sessionID,
+					links:     codebuddyImageTokenRe.FindAllString(message.Content, -1),
+				})
+		}
 		for _, call := range message.ToolCalls {
 			for _, event := range call.ResultEvents {
 				key := toolResultEventIdentity{
@@ -94,9 +140,36 @@ func (s *SourceToolResults) Add(sessionID string, messages []db.Message) {
 	}
 }
 
-// Found reports whether any requested tool result was archived.
+// Found reports whether any requested tool result or image link was
+// archived.
 func (s *SourceToolResults) Found() bool {
-	return s != nil && len(s.saved) > 0
+	return s != nil && (len(s.saved) > 0 || len(s.images) > 0)
+}
+
+// agreedImageLinks returns the image tokens the sessions other than
+// sessionID archived for the message sourceUUID, when every archived copy
+// lists the same ones.
+func (s *SourceToolResults) agreedImageLinks(
+	sourceUUID, sessionID string,
+) ([]string, bool) {
+	if s == nil {
+		return nil, false
+	}
+	var first []string
+	found := false
+	for _, saved := range s.images[sourceUUID] {
+		if saved.sessionID == sessionID {
+			continue
+		}
+		if !found {
+			first, found = saved.links, true
+			continue
+		}
+		if !slices.Equal(saved.links, first) {
+			return nil, false
+		}
+	}
+	return first, found
 }
 
 // agreed returns the event the sessions other than sessionID archived for
@@ -292,7 +365,8 @@ func keepCodeBuddyLegacyCompanionData(
 	candidate := result.Candidate
 	messages := slices.Clone(candidate.Messages)
 	usage := keepCodeBuddyLegacyUsage(&messages, prior.Messages, candidate.Session.ID)
-	images := keepCodeBuddyLegacyImages(messages, prior.Messages)
+	images := keepCodeBuddyLegacyImages(messages, prior.Messages,
+		prior.SourceToolResults, candidate.Session.ID)
 	if !usage && !images {
 		return result, ctx.Err()
 	}
@@ -363,6 +437,11 @@ func keepCodeBuddyLegacyUsage(
 	return changed
 }
 
+const (
+	codebuddyImageLink        = "](asset://"
+	codebuddyImageUnavailable = "[image unavailable: "
+)
+
 var codebuddyImageTokenRe = regexp.MustCompile(
 	`!\[image\]\(asset://[^)\s]+\)|\[image unavailable: [^\]\n]*\]`,
 )
@@ -370,10 +449,16 @@ var codebuddyImageTokenRe = regexp.MustCompile(
 // keepCodeBuddyLegacyImages puts back the archived image links of messages
 // that now show an image as unavailable. Images match by message identity
 // and position, and only when both copies list the same number of images.
-func keepCodeBuddyLegacyImages(messages []db.Message, archived []db.Message) bool {
+// A message the session's own archive holds no image links for, such as one
+// a rewind just moved into a new branch, uses the links the source's other
+// sessions archived, when they all agree.
+func keepCodeBuddyLegacyImages(
+	messages []db.Message, archived []db.Message,
+	source *SourceToolResults, sessionID string,
+) bool {
 	saved := make(map[string][]int)
 	for i, m := range archived {
-		if m.SourceUUID != "" && strings.Contains(m.Content, "](asset://") {
+		if m.SourceUUID != "" && strings.Contains(m.Content, codebuddyImageLink) {
 			saved[m.SourceUUID] = append(saved[m.SourceUUID], i)
 		}
 	}
@@ -384,12 +469,22 @@ func keepCodeBuddyLegacyImages(messages []db.Message, archived []db.Message) boo
 	changed := false
 	for i := range messages {
 		m := &messages[i]
-		olds := saved[m.SourceUUID]
-		if m.SourceUUID == "" || counts[m.SourceUUID] != 1 || len(olds) != 1 ||
-			!strings.Contains(m.Content, "[image unavailable: ") {
+		if m.SourceUUID == "" || counts[m.SourceUUID] != 1 ||
+			!strings.Contains(m.Content, codebuddyImageUnavailable) {
 			continue
 		}
-		links := codebuddyImageTokenRe.FindAllString(archived[olds[0]].Content, -1)
+		var links []string
+		switch olds := saved[m.SourceUUID]; len(olds) {
+		case 0:
+			var ok bool
+			if links, ok = source.agreedImageLinks(m.SourceUUID, sessionID); !ok {
+				continue
+			}
+		case 1:
+			links = codebuddyImageTokenRe.FindAllString(archived[olds[0]].Content, -1)
+		default:
+			continue
+		}
 		content, ok := restoreCodeBuddyImageLinks(m.Content, links)
 		if !ok {
 			continue
@@ -416,7 +511,7 @@ func restoreCodeBuddyImageLinks(text string, links []string) (string, bool) {
 	for i, loc := range tokens {
 		b.WriteString(text[last:loc[0]])
 		token := text[loc[0]:loc[1]]
-		if strings.HasPrefix(token, "[image unavailable: ") &&
+		if strings.HasPrefix(token, codebuddyImageUnavailable) &&
 			strings.HasPrefix(links[i], "![image](asset://") {
 			token, changed = links[i], true
 		}

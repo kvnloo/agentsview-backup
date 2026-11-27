@@ -5816,7 +5816,11 @@ schemas keep their existing ordering behavior.
     (the check the 4.x reader applies), an assistant message file it lists
     is missing or invalid, or a `codebuddy-asset://` image cannot be read.
     Totals and images the directory still reads, including explicit zeros,
-    replace the archived ones.
+    replace the archived ones. A branch that a rewind just created has no
+    archive of its own, so its image links come from the other retained
+    sessions of the same transcript, and only when every archived copy of
+    that message lists the same links; request totals come only from the
+    session's own archive.
   - A transcript's fingerprint covers the contents of its saved tool outputs
     and, for each `image_blob_ref`, whether `<home>/blobs/<prefix>/<sha>.<ext>`
     exists and its size. The warm stat digest covers the same blob paths,

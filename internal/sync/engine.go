@@ -11778,11 +11778,12 @@ func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 }
 
 // preloadRelatedSourceArchives gives the CodeBuddy writes whose saved tool
-// outputs are gone one shared index per transcript of the outputs its
-// sessions archived. It reads them before the batch rewrites any of them:
-// after a rewind, the conversation's new copy no longer holds the call its
-// branch now shows. Each transcript's sessions are read once however many
-// branches need an output, and the index keeps only the requested outputs.
+// outputs are gone, or whose converted 4.x images no longer read, one shared
+// index per transcript of the outputs and image links its sessions archived.
+// It reads them before the batch rewrites any of them: after a rewind, the
+// conversation's new copy no longer holds the call or image its branch now
+// shows. Each transcript's sessions are read once however many branches need
+// one, and the index keeps only the requested outputs and links.
 // The same conversation can sit under several configured homes, and the
 // archive may hold it from another copy than the one being written, so the
 // index also reads the sessions saved from the copies the batch's sessions
@@ -11794,8 +11795,10 @@ func (e *Engine) preloadRelatedSourceArchives(
 	var paths []string
 	for i := range batch {
 		pw := &batch[i]
+		images := pw.sess.LegacyCompanionIncomplete && ingest.HasUnavailableImage(pw.msgs)
 		if pw.sess.Agent != parser.AgentCodeBuddy || pw.sess.File.Path == "" ||
-			pw.sourceToolResults != nil || !hasUnresolvedPersistedToolResult(pw.msgs) {
+			pw.sourceToolResults != nil ||
+			(!images && !hasUnresolvedPersistedToolResult(pw.msgs)) {
 			continue
 		}
 		path := e.effectiveSourcePath(pw.sess.File.Path)
@@ -11809,6 +11812,9 @@ func (e *Engine) preloadRelatedSourceArchives(
 			paths = append(paths, path)
 		}
 		index.Want(pw.msgs)
+		if images {
+			index.WantImages(pw.msgs)
+		}
 		pw.sourceToolResults = index
 	}
 	archivedCopies := e.archivedSourceCopies(ctx, batch, bySource)
@@ -12007,10 +12013,14 @@ func (e *Engine) reconcileProviderHistory(
 				}
 			}
 		}
-		if unresolved && agent == parser.AgentCodeBuddy {
+		images := companionIncomplete && ingest.HasUnavailableImage(candidate.Parsed.Messages)
+		if (unresolved || images) && agent == parser.AgentCodeBuddy {
 			if sourceResults == nil && candidate.Session.FilePath != nil {
 				sourceResults = &ingest.SourceToolResults{}
 				sourceResults.Want(candidate.Parsed.Messages)
+				if images {
+					sourceResults.WantImages(candidate.Parsed.Messages)
+				}
 				if err := e.loadSourceToolResults(
 					ctx, sourceResults, *candidate.Session.FilePath, agent,
 				); err != nil {

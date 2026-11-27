@@ -145,7 +145,7 @@ func TestStoredSourceRankUsesPhysicalPathsWhenAvailable(t *testing.T) {
 			}
 			lookups := 0
 			counting := &sourceRankCountingProvider{Provider: provider, lookups: &lookups}
-			ranked, err := engine.storedSourceRanksHigher(t.Context(), counting, storedPath, candidate)
+			ranked, err := engine.storedSourceRanksHigher(t.Context(), counting, "", storedPath, candidate)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantRanked, ranked)
 			assert.Equal(t, tc.wantCalls, calls)
@@ -224,7 +224,7 @@ func TestStoredSourceRankKeepsUnmappedRemoteCodeBuddyTranscript(t *testing.T) {
 				pathRewriter:       func(path string) string { return "host:" + path },
 				storedPathResolver: tc.resolver,
 			}
-			ranked, err := engine.storedSourceRanksHigher(t.Context(), provider, tc.storedPath, legacy)
+			ranked, err := engine.storedSourceRanksHigher(t.Context(), provider, "", tc.storedPath, legacy)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantRanked, ranked)
 		})

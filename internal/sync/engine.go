@@ -6011,7 +6011,7 @@ func (e *Engine) reconciliationMemberRelocated(
 		return false, nil
 	}
 	lowerRanked, err := e.storedSourceRanksHigher(
-		ctx, provider, storedPath, source,
+		ctx, provider, fullSessionID, storedPath, source,
 	)
 	if err != nil {
 		return false, err
@@ -9464,7 +9464,7 @@ func reconciliationMemberIdentity(
 func (e *Engine) storedSourceRanksHigher(
 	ctx context.Context,
 	provider parser.Provider,
-	storedPath string,
+	fullSessionID, storedPath string,
 	candidate parser.SourceRef,
 ) (bool, error) {
 	resolver, resolves := provider.(parser.ReconciliationSourceResolver)
@@ -9474,25 +9474,34 @@ func (e *Engine) storedSourceRanksHigher(
 	}
 	// storedPathRanks ranks the stored source by its path layout alone, for
 	// a stored file that is gone or, on a remote sync, a stored location
-	// that cannot be mapped to a local copy.
-	storedPathRanks := func(path string) bool {
+	// that cannot be mapped to a local copy. A path carries no modification
+	// time, so the rank takes the one the archive recorded for the session:
+	// only a copy modified after the archived source can then replace it.
+	storedPathRanks := func(path string) (bool, error) {
 		pathRanker, ok := provider.(parser.StoredSourcePathRanker)
 		if !ok {
-			return false
+			return false, nil
 		}
 		rank, ok := pathRanker.RankStoredSourcePath(path)
 		if !ok {
-			return false
+			return false, nil
 		}
-		return ranker.ReconciliationSourceRank(candidate).Lower(rank)
+		if rank.Recency == 0 {
+			mtime, err := e.archivedSourceMtime(ctx, fullSessionID)
+			if err != nil {
+				return false, err
+			}
+			rank.Recency = mtime
+		}
+		return ranker.ReconciliationSourceRank(candidate).Lower(rank), nil
 	}
 	if e.pathRewriter != nil {
 		if e.storedPathResolver == nil {
-			return storedPathRanks(storedPath), nil
+			return storedPathRanks(storedPath)
 		}
 		resolvedPath, ok := e.storedPathResolver(storedPath)
 		if !ok || resolvedPath == "" {
-			return storedPathRanks(storedPath), nil
+			return storedPathRanks(storedPath)
 		}
 		storedPath = resolvedPath
 	}
@@ -9503,11 +9512,43 @@ func (e *Engine) storedSourceRanksHigher(
 		return false, err
 	}
 	if !found {
-		return storedPathRanks(storedPath), nil
+		return storedPathRanks(storedPath)
 	}
 	return ranker.ReconciliationSourceRank(candidate).Lower(
 		ranker.ReconciliationSourceRank(stored),
 	), nil
+}
+
+// archivedSourceMtime returns the source modification time the archive
+// recorded for a session, from the database that holds its stored path, or
+// zero when no row records one.
+func (e *Engine) archivedSourceMtime(
+	ctx context.Context, fullSessionID string,
+) (int64, error) {
+	if fullSessionID == "" {
+		return 0, nil
+	}
+	var stores []db.Store
+	if e.db != nil {
+		stores = append(stores, e.db)
+	}
+	if e.archiveStore != nil {
+		// A rebuild writes a fresh database; the session's row is in the
+		// original archive it replaces.
+		stores = append(stores, e.archiveStore)
+	}
+	for _, store := range stores {
+		sess, err := store.GetSessionFull(ctx, fullSessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"read archived source time of %s: %w", fullSessionID, err,
+			)
+		}
+		if sess != nil && sess.FileMtime != nil && *sess.FileMtime != 0 {
+			return *sess.FileMtime, nil
+		}
+	}
+	return 0, nil
 }
 
 func (e *Engine) providerSourceLowerRanked(
@@ -9533,7 +9574,9 @@ func (e *Engine) providerSourceLowerRanked(
 		// is recorded in the original archive it replaces.
 		storedPath = archive.GetSessionFilePath(ctx, fullSessionID)
 	}
-	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
+	return e.storedSourceRanksHigher(
+		ctx, provider, fullSessionID, storedPath, candidate,
+	)
 }
 
 func (e *Engine) providerSourceForDiscoveredFile(

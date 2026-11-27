@@ -75,7 +75,11 @@ and `daemon restart` stay running until you stop them. Ordinary session commands
 need the daemon, though dedicated diagnostics such as `db adopt-machine --list`
 and `doctor sync` can inspect the archive without starting it. If a script must
 never auto-start a daemon, set `AGENTSVIEW_NO_DAEMON=1`; commands that require
-one then refuse to run.
+one then refuse to run. To turn auto-start off for every command and agent hook
+that uses this data directory, including agent sessions already running, set
+`no_daemon_autostart = true` in `config.toml`. See
+[CLI daemon behavior](/docs/commands/#cli-daemon-behavior) for running `serve`
+under a service manager.
 
 For code attribution stats, the Cursor source performs a live, machine-local
 read from `~/.cursor/ai-tracking/ai-code-tracking.db` by default. If Cursor
@@ -270,6 +274,7 @@ cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
+# no_daemon_autostart = true
 sync_idle_after = "10m"
 sync_interval = "5s"
 background_sync_interval = "10m"
@@ -337,6 +342,7 @@ syncing while idle, set `sync_idle_after` to `"0"` and restart the server.
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for automatically started and `serve --background` writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                               |
+| `no_daemon_autostart`               | Never start or replace a writable daemon automatically; commands use a running daemon or their direct local path, or refuse. Same as `AGENTSVIEW_NO_DAEMON=1`                                                                                                                                                                                                                                                                                                                    |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
 | `sync_interval`                     | Minimum time between watcher-triggered session sync starts while the web UI is open, and in archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. While a [change stream](/docs/conversation-export/#follow-changes-live) is open, `serve` uses at most `"1s"`. Applies on restart or when provider changes rebuild watchers. Raw sync and periodic catch-up keep their own timers.               |
 | `background_sync_interval`          | Minimum time between watcher-triggered session sync starts in `serve` while nobody is watching the archive. Default `"10m"`. Archive requests sync pending changes first. `"0s"` uses `sync_interval` all the time, and a longer `sync_interval` takes precedence. Applies on restart.                                                                                                                                                                                           |

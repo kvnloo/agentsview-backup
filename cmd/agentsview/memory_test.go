@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/agenthook"
+	"go.kenn.io/kit/daemon"
 
 	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
@@ -101,6 +103,63 @@ func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
 	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, stderr.String(), "remote unavailable")
+}
+
+func TestMemorySessionStartHookWaitsForManagedDaemon(t *testing.T) {
+	for _, available := range []bool{true, false} {
+		t.Run(fmt.Sprintf("available=%t", available), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			t.Setenv("AGENTSVIEW_MEMORY_MODE", "local")
+			t.Setenv("AGENTSVIEW_DISABLE_AUTO_SYNC", "")
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+			forbidStartBackgroundServeForTransport(t, "managed service must own startup")
+			stubLaunchProcesses(t, fakeProcess{name: "sh"})
+			oldInterval := memoryServiceWaitInterval
+			memoryServiceWaitInterval = 10 * time.Millisecond
+			t.Cleanup(func() { memoryServiceWaitInterval = oldInterval })
+
+			var posts atomic.Int32
+			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/memory/refresh" {
+					posts.Add(1)
+					w.WriteHeader(http.StatusAccepted)
+					return
+				}
+				ping.ServeHTTP(w, r)
+			}))
+			t.Cleanup(server.Close)
+			endpoint := serverEndpoint(t, server)
+			if available {
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					time.Sleep(40 * time.Millisecond)
+					_, err := WriteDaemonRuntime(dir, endpoint.Host, endpoint.Port, version, false)
+					assert.NoError(t, err)
+				}()
+				t.Cleanup(func() { <-done; RemoveDaemonRuntime(dir) })
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond) //nolint:kennlint // deadlinetest: expiry verifies the unavailable service wait is bounded.
+			defer cancel()
+			cmd := newRootCommand()
+			var stderr bytes.Buffer
+			cmd.SetContext(ctx)
+			cmd.SetIn(strings.NewReader("{}"))
+			cmd.SetErr(&stderr)
+			cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+			require.NoError(t, cmd.Execute())
+			if available {
+				assert.EqualValues(t, 1, posts.Load())
+				assert.Empty(t, stderr.String())
+			} else {
+				assert.Zero(t, posts.Load())
+				assert.Equal(t, 1, strings.Count(stderr.String(), "writable local daemon is unavailable"))
+			}
+		})
+	}
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

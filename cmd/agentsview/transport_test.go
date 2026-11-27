@@ -483,6 +483,28 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 	assert.Contains(t, err.Error(), "agentsview daemon start")
 }
 
+func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
+	cfg, err := config.LoadReadOnlyAt(dir)
+	require.NoError(t, err)
+	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+	require.ErrorContains(t, err, "daemon autostart is disabled")
+	assert.Contains(t, err.Error(), "no_daemon_autostart")
+}
+
+func TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	cfg := config.Config{DataDir: dir}
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start with cached config")
+	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
+	require.ErrorContains(t, err, "no_daemon_autostart")
+}
+
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	writeUnreachableDaemonRuntime(t, dir, false)

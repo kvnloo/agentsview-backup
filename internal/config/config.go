@@ -1300,8 +1300,8 @@ type Config struct {
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
 	DeploymentEmbeddings *VectorEmbeddingsServerConfig `json:"-" toml:"-"`
-	// NoDaemonAutostart suppresses daemon autostart for this invocation
-	// only; pg push --embed sets it to keep the archive writer local.
+	// NoDaemonAutostart suppresses daemon autostart; pg push --embed also
+	// sets it to keep the archive writer local.
 	NoDaemonAutostart bool `json:"-" toml:"-"`
 	// RequireDaemon sends archive writes only through a live writable daemon;
 	// never autostart one or open the archive directly.
@@ -2082,6 +2082,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
+		NoDaemonAutostart              bool                   `toml:"no_daemon_autostart"`
 		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
 		SyncInterval                   time.Duration          `toml:"sync_interval"`
 		BackgroundSyncInterval         time.Duration          `toml:"background_sync_interval"`
@@ -2444,6 +2445,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
+	}
+	if file.NoDaemonAutostart {
+		c.NoDaemonAutostart = true
 	}
 	if meta.IsDefined("sync_interval") {
 		c.SyncInterval = file.SyncInterval

@@ -1,14 +1,43 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/gofrs/flock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReplicaPushRespectsSavedNoDaemonAutostart(t *testing.T) {
+	for _, watch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watch=%t", watch), func(t *testing.T) {
+			dir := t.TempDir()
+			isolateDeploymentEnv(t)
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			restoreTestLogOutput(t)
+			writeTestConfig(t, dir, `no_daemon_autostart = true
+[pg]
+url = "postgres://user@127.0.0.1:1/archive"
+allow_insecure = true
+`)
+			require.NoError(t, os.Mkdir(filepath.Join(dir, "sessions.db"), 0o700))
+			forbidStartBackgroundServeForTransport(t, "saved setting must suppress replica daemon start")
+			var err error
+			if watch {
+				err = runReplicaPushWatch(t.Context(), pgReplica{}, ReplicaPushConfig{}, "")
+			} else {
+				err = runReplicaPush(t.Context(), pgReplica{}, ReplicaPushConfig{}, "")
+			}
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "no_daemon_autostart")
+		})
+	}
+}
 
 func TestReplicaWatchLockLeavesDataDirUntouched(t *testing.T) {
 	dir, lockPath := replicaWatchLockFixture(t)

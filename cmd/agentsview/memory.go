@@ -46,6 +46,7 @@ type memorySessionStartRequest struct {
 }
 
 var (
+	memoryServiceWaitInterval         = 100 * time.Millisecond
 	runMemorySessionStart             = executeMemorySessionStart
 	requestMemoryLocalRefresh         = requestLocalMemoryRefresh
 	requestMemoryContributorRefresh   = requestHostedContributorRefresh
@@ -396,16 +397,31 @@ func requestLocalMemoryRefresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("memory session-start: loading config: %w", err)
 	}
-	tr, err := ensureTransportContext(
-		ctx, &cfg, transportIntentArchiveWrite, memorySessionStartTimeout,
-	)
-	if err != nil {
-		return fmt.Errorf("memory session-start: local daemon: %w", err)
+	var tr transport
+	for {
+		tr, err = ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, memorySessionStartTimeout)
+		if err != nil {
+			if ctx.Err() != nil && (daemonAutostartDisabled() || cfg.NoDaemonAutostart) {
+				break
+			}
+			return fmt.Errorf("memory session-start: local daemon: %w", err)
+		}
+		if tr.Mode == transportHTTP && !tr.ReadOnly {
+			break
+		}
+		if !daemonAutostartDisabled() && !cfg.NoDaemonAutostart {
+			break
+		}
+		timer := time.NewTimer(memoryServiceWaitInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.New("memory session-start: writable local daemon is unavailable")
+		case <-timer.C:
+		}
 	}
 	if tr.Mode != transportHTTP || tr.ReadOnly {
-		return errors.New(
-			"memory session-start: writable local daemon is unavailable",
-		)
+		return errors.New("memory session-start: writable local daemon is unavailable")
 	}
 	if tr.Runtime != nil && tr.Runtime.NoSync {
 		return errors.New(

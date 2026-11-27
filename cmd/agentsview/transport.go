@@ -248,8 +248,7 @@ func ensureTransportContext(
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return transport{}, fmt.Errorf("loading daemon auth: %w", err)
 	}
-	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
-	// invocation only, without touching the process environment.
+	// cfg.NoDaemonAutostart also applies the saved setting and per-command policy.
 	autostartDisabled := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
 	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		waitTimeout <= 0 {
@@ -292,7 +291,7 @@ func ensureTransportContext(
 				if intent == transportIntentRead {
 					return transport{}, errors.New(
 						"daemon restart required: running daemon version differs from this client; " +
-							"run `agentsview daemon restart` or unset AGENTSVIEW_NO_DAEMON to allow automatic replacement",
+							"run `agentsview daemon restart`; to allow automatic replacement, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml",
 					)
 				}
 				return tr, nil
@@ -338,9 +337,10 @@ func ensureTransportContext(
 			return transport{}, cliUnavailableError(errors.New(
 				"daemon autostart is disabled; direct SQLite reads are "+
 					"not supported for this command. Start a daemon with "+
-					"`agentsview daemon start` or unset "+
-					"AGENTSVIEW_NO_DAEMON",
-			), "run `agentsview daemon start`, then retry; unset AGENTSVIEW_NO_DAEMON only if this command should start a daemon automatically")
+					"`agentsview daemon start`, or unset the "+
+					"AGENTSVIEW_NO_DAEMON environment variable and remove "+
+					"no_daemon_autostart from config.toml to start one automatically",
+			), "run `agentsview daemon start`, then retry; to start a daemon automatically, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml")
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
@@ -510,6 +510,9 @@ func guardDaemonAutoStartConfig(cfg config.Config) error {
 	effective, err := config.LoadReadOnlyAt(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("loading daemon configuration: %w", err)
+	}
+	if effective.NoDaemonAutostart {
+		return errors.New("daemon autostart is disabled by no_daemon_autostart in config.toml; run `agentsview daemon start`, or remove the setting to start a daemon automatically")
 	}
 	host := strings.TrimSpace(effective.Host)
 	if host == "" || effective.RequireAuth || isLoopbackHost(host) {

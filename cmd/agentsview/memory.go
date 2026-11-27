@@ -397,11 +397,12 @@ func requestLocalMemoryRefresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("memory session-start: loading config: %w", err)
 	}
+	autostartOff := daemonAutostartDisabled() || cfg.NoDaemonAutostart
 	var tr transport
 	for {
 		tr, err = ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, memorySessionStartTimeout)
 		if err != nil {
-			if ctx.Err() != nil && (daemonAutostartDisabled() || cfg.NoDaemonAutostart) {
+			if ctx.Err() != nil && autostartOff {
 				break
 			}
 			return fmt.Errorf("memory session-start: local daemon: %w", err)
@@ -409,7 +410,7 @@ func requestLocalMemoryRefresh(ctx context.Context) error {
 		if tr.Mode == transportHTTP && !tr.ReadOnly {
 			break
 		}
-		if !daemonAutostartDisabled() && !cfg.NoDaemonAutostart {
+		if !autostartOff {
 			break
 		}
 		timer := time.NewTimer(memoryServiceWaitInterval)

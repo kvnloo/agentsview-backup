@@ -490,9 +490,35 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
 	cfg, err := config.LoadReadOnlyAt(dir)
 	require.NoError(t, err)
-	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentRead, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the missing service must exhaust the wait.
 	require.ErrorContains(t, err, "daemon autostart is disabled")
 	assert.Contains(t, err.Error(), "no_daemon_autostart")
+}
+
+func TestEnsureTransport_SavedNoDaemonAutostartWaitsForRead(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	cfg, err := config.LoadReadOnlyAt(dir)
+	require.NoError(t, err)
+	setTestVersion(t, "test")
+	host, port := testPingServer(t)
+	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
+	original := detectTransportForSelection
+	calls := 0
+	detectTransportForSelection = func(ctx context.Context, dataDir, token string, wait time.Duration) (transport, error) {
+		calls++
+		if calls == 2 {
+			_, err := WriteDaemonRuntime(dir, host, port, "test", false)
+			require.NoError(t, err)
+		}
+		return original(ctx, dataDir, token, wait)
+	}
+	t.Cleanup(func() { detectTransportForSelection = original; RemoveDaemonRuntime(dir) })
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.GreaterOrEqual(t, calls, 2)
 }
 
 func TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig(t *testing.T) {
@@ -501,8 +527,29 @@ func TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig(t *testing.T) {
 	cfg := config.Config{DataDir: dir}
 	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
 	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start with cached config")
-	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
-	require.ErrorContains(t, err, "no_daemon_autostart")
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentArchiveWrite, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportDirect, tr.Mode)
+}
+
+func TestEnsureTransport_SavedNoDaemonAutostartReadCancellation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	cfg := config.Config{DataDir: dir, NoDaemonAutostart: true}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	original := detectTransportForSelection
+	calls := 0
+	detectTransportForSelection = func(ctx context.Context, dataDir, token string, wait time.Duration) (transport, error) {
+		calls++
+		if calls == 2 {
+			cancel()
+		}
+		return original(ctx, dataDir, token, wait)
+	}
+	t.Cleanup(func() { detectTransportForSelection = original })
+	_, err := ensureTransportContext(ctx, &cfg, transportIntentRead, time.Second)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {

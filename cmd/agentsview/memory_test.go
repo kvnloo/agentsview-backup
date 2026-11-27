@@ -133,16 +133,23 @@ func TestMemorySessionStartHookWaitsForManagedDaemon(t *testing.T) {
 			t.Cleanup(server.Close)
 			endpoint := serverEndpoint(t, server)
 			if available {
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					time.Sleep(40 * time.Millisecond)
-					_, err := WriteDaemonRuntime(dir, endpoint.Host, endpoint.Port, version, false)
-					assert.NoError(t, err)
-				}()
-				t.Cleanup(func() { <-done; RemoveDaemonRuntime(dir) })
+				original := detectTransportForSelection
+				calls := 0
+				detectTransportForSelection = func(ctx context.Context, dataDir, token string, wait time.Duration) (transport, error) {
+					calls++
+					if calls == 2 {
+						_, err := WriteDaemonRuntime(dir, endpoint.Host, endpoint.Port, version, false)
+						require.NoError(t, err)
+					}
+					return original(ctx, dataDir, token, wait)
+				}
+				t.Cleanup(func() { detectTransportForSelection = original; RemoveDaemonRuntime(dir) })
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond) //nolint:kennlint // deadlinetest: expiry verifies the unavailable service wait is bounded.
+			timeout := 5 * time.Second
+			if !available {
+				timeout = 300 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), timeout) //nolint:kennlint // deadlinetest: expiry verifies the unavailable service wait is bounded.
 			defer cancel()
 			cmd := newRootCommand()
 			var stderr bytes.Buffer

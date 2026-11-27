@@ -852,10 +852,10 @@ When you pass `--no-start-daemon`, `pg push --watch` and
 To disable daemon auto-start for one shell or script, set
 `AGENTSVIEW_NO_DAEMON=1`. To disable it for every command and agent hook that
 uses the data directory, including agent sessions already running, set
-`no_daemon_autostart = true` in that directory's `config.toml`. Commands that
-require the daemon refuse to run while auto-start is disabled, except
-`memory session-start --hook`, which waits up to about two seconds for a server
-and then exits without starting one.
+`no_daemon_autostart = true` in that directory's `config.toml`. When the saved
+setting is on, reads and `memory session-start --hook` wait up to about two
+seconds for a server. Commands that need a daemon then report an error if it
+doesn't return. Direct write commands still use their local path.
 
 If systemd, launchd, or another service manager runs `agentsview serve` in the
 foreground, whatever installs or updates the service should write

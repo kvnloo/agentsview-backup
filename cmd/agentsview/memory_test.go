@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -105,68 +104,82 @@ func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
 	assert.Contains(t, stderr.String(), "remote unavailable")
 }
 
-func TestMemorySessionStartHookWaitsForManagedDaemon(t *testing.T) {
-	for _, available := range []bool{true, false} {
-		t.Run(fmt.Sprintf("available=%t", available), func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-			t.Setenv("AGENTSVIEW_MEMORY_MODE", "local")
-			t.Setenv("AGENTSVIEW_DISABLE_AUTO_SYNC", "")
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
-			forbidStartBackgroundServeForTransport(t, "managed service must own startup")
-			stubLaunchProcesses(t, fakeProcess{name: "sh"})
-			oldInterval := memoryServiceWaitInterval
-			memoryServiceWaitInterval = 10 * time.Millisecond
-			t.Cleanup(func() { memoryServiceWaitInterval = oldInterval })
+func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: an absent service must exhaust the caller's deadline.
+	defer cancel()
+	started := time.Now()
+	err := requestLocalMemoryRefresh(ctx)
+	require.EqualError(t, err, "memory session-start: writable local daemon is unavailable")
+	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+}
 
-			var posts atomic.Int32
-			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/v1/memory/refresh" {
-					posts.Add(1)
-					w.WriteHeader(http.StatusAccepted)
-					return
-				}
-				ping.ServeHTTP(w, r)
-			}))
-			t.Cleanup(server.Close)
-			endpoint := serverEndpoint(t, server)
-			if available {
-				original := detectTransportForSelection
-				calls := 0
-				detectTransportForSelection = func(ctx context.Context, dataDir, token string, wait time.Duration) (transport, error) {
-					calls++
-					if calls == 2 {
-						_, err := WriteDaemonRuntime(dir, endpoint.Host, endpoint.Port, version, false)
-						require.NoError(t, err)
-					}
-					return original(ctx, dataDir, token, wait)
-				}
-				t.Cleanup(func() { detectTransportForSelection = original; RemoveDaemonRuntime(dir) })
-			}
-			timeout := 5 * time.Second
-			if !available {
-				timeout = 300 * time.Millisecond
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), timeout) //nolint:kennlint // deadlinetest: expiry verifies the unavailable service wait is bounded.
-			defer cancel()
-			cmd := newRootCommand()
-			var stderr bytes.Buffer
-			cmd.SetContext(ctx)
-			cmd.SetIn(strings.NewReader("{}"))
-			cmd.SetErr(&stderr)
-			cmd.SetArgs([]string{"memory", "session-start", "--hook"})
-			require.NoError(t, cmd.Execute())
-			if available {
-				assert.EqualValues(t, 1, posts.Load())
-				assert.Empty(t, stderr.String())
-			} else {
-				assert.Zero(t, posts.Load())
-				assert.Equal(t, 1, strings.Count(stderr.String(), "writable local daemon is unavailable"))
-			}
-		})
-	}
+func TestMemoryManagedDaemonStalledDeadline(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
+	defer cancel()
+	started := time.Now()
+	err := requestLocalMemoryRefresh(ctx)
+	require.EqualError(t, err, "memory session-start: writable local daemon is unavailable")
+	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
+func TestMemoryManagedDaemonCancellation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := requestLocalMemoryRefresh(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "memory session-start: local daemon:")
+}
+
+func TestMemoryManagedDaemonReturns(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	var posts atomic.Int32
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/memory/refresh" {
+			posts.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		ping.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_, err := WriteDaemonRuntime(dir, host, port, version, false)
+		written <- err
+	}()
+	t.Cleanup(func() { require.NoError(t, <-written); RemoveDaemonRuntime(dir) })
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, requestLocalMemoryRefresh(ctx))
+	assert.EqualValues(t, 1, posts.Load())
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

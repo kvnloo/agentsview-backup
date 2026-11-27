@@ -393,6 +393,12 @@ test-api-version: pricing-snapshot ensure-embed-dir
 test-short: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -short
 
+test-managed-daemon: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/config ./cmd/agentsview ./internal/mcp ./internal/servicehttp -run '^(TestNoDaemonAutostartConfig|TestEnsureTransport_SavedNoDaemonAutostart|TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig|TestManagedDaemonWaitDeadline|TestManagedDaemonWaitFindsReturningService|TestSavedNoDaemonAutostartReloadsAfterRemoval|TestMemoryManagedDaemonWaitDeadline|TestMemoryManagedDaemonStalledDeadline|TestMemoryManagedDaemonCancellation|TestMemoryManagedDaemonReturns|TestManagedDaemonSavedPolicyKeepsDirectWrites|TestDaemonDiscoveryRespectsDeadline|TestMCPDaemonFileReferencesUsesServingCapability|TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime|TestMCPDaemonServiceFrictionCapabilityFollowsReadOnlyDaemon|TestReaderCapabilityRegistersRecallTool|TestFrictionTools|TestFileReferencesTool|TestHTTPBackendRecallCapabilityRespectsReadOnlyMode)$$' -count=1
+
+test-managed-daemon-compile: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -run '^$$'
+
 # CI test runner. Prints a compact log, writes go test JSON events to
 # gotestsum/<suite>.json for the CI flake monitor, and reruns failed tests up
 # to twice, recording the reruns in gotestsum/<suite>-reruns.txt.

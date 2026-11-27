@@ -103,7 +103,7 @@ func (s *Server) RestrictedHandler(ctx context.Context, policyFile string) (http
 		return ok && token != "" && hmac.Equal([]byte(provided), []byte(token))
 	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/version" && service.SupportsRecallQueries(s.sessions) {
+		if r.URL.Path == "/api/v1/version" && service.SupportsRecallQueries(r.Context(), s.sessions) {
 			w.Header().Set("X-Agentsview-Recall-Queries", "non-recording")
 		}
 		gzipMiddleware(logMiddleware(s.archiveStaleMiddleware(s.mux))).ServeHTTP(w, r)

@@ -15,7 +15,7 @@ import (
 
 func TestFrictionTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
+	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() {
 		require.NoError(t, ct.Close())

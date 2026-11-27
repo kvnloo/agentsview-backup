@@ -1300,9 +1300,10 @@ type Config struct {
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
 	DeploymentEmbeddings *VectorEmbeddingsServerConfig `json:"-" toml:"-"`
-	// NoDaemonAutostart suppresses daemon autostart; pg push --embed also
-	// sets it to keep the archive writer local.
+	// NoDaemonAutostart suppresses daemon autostart for this invocation only.
 	NoDaemonAutostart bool `json:"-" toml:"-"`
+	// SavedNoDaemonAutostart is the autostart policy from config.toml.
+	SavedNoDaemonAutostart bool `json:"-" toml:"-"`
 	// RequireDaemon sends archive writes only through a live writable daemon;
 	// never autostart one or open the archive directly.
 	RequireDaemon bool `json:"-" toml:"-"`
@@ -2446,8 +2447,8 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
 	}
-	if file.NoDaemonAutostart {
-		c.NoDaemonAutostart = true
+	if meta.IsDefined("no_daemon_autostart") {
+		c.SavedNoDaemonAutostart = file.NoDaemonAutostart
 	}
 	if meta.IsDefined("sync_interval") {
 		c.SyncInterval = file.SyncInterval

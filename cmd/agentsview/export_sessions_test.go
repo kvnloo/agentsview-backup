@@ -900,7 +900,7 @@ func stubExportDaemon(t *testing.T, dir string) func() {
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			if rt := FindWritableDaemonRuntime(t.Context(), cfg.DataDir, cfg.AuthToken); rt != nil {
 				return rt, nil
 			}
 			select {
@@ -1147,7 +1147,7 @@ func TestExportWaitCursorResetSuppressesStubStartupProgress(t *testing.T) {
 		fmt.Fprintln(daemonProgressWriter(ctx), "starting test daemon")
 		writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
 		close(polled)
-		return FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken), nil
+		return FindWritableDaemonRuntime(t.Context(), cfg.DataDir, cfg.AuthToken), nil
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

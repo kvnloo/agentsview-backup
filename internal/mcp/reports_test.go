@@ -45,7 +45,7 @@ func newReportClient(t *testing.T, n int) *mcp.ClientSession {
 	t.Helper()
 	d := dbtest.OpenTestDB(t)
 	seedReportSessions(t, d, n)
-	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
+	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
 	st, ct := newInMemoryPair(t, srv)
 	t.Cleanup(func() {
 		require.NoError(t, ct.Close())
@@ -164,7 +164,7 @@ func TestServer_TermTrends(t *testing.T) {
 	reply := dbtest.AsstMsg("s1", 1, "two seams")
 	reply.Timestamp = start
 	dbtest.SeedMessages(t, d, user, reply)
-	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
+	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
 	st, ct := newInMemoryPair(t, srv)
 	t.Cleanup(func() {
 		require.NoError(t, ct.Close())

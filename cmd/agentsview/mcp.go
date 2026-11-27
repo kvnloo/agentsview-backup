@@ -134,7 +134,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 				opts.DiscoveryDirectory = filepath.Join(cfg.DataDir, "mcp")
 				opts.BackendURL, _ = cmd.Flags().GetString("server")
 				if opts.BackendURL == "" && !pgReadRequested(cmd) {
-					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
+					if runtime := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); runtime != nil {
 						opts.BackendURL = urlFromDaemonRuntime(runtime)
 					}
 				}
@@ -281,44 +281,44 @@ func newMCPDaemonService(cfg config.Config) service.SessionService {
 	return &mcpDaemonService{cfg: cfg}
 }
 
-func (s *mcpDaemonService) SupportsFileReferences() bool {
+func (s *mcpDaemonService) SupportsFileReferences(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return servingDocbankEnabled(s.cfg)
+	return servingDocbankEnabled(ctx, s.cfg)
 }
 
 // servingDocbankEnabled answers from the daemon that serves MCP calls. Without
 // one, the daemon MCP will start reads the same config.
-func servingDocbankEnabled(cfg config.Config) bool {
-	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+func servingDocbankEnabled(ctx context.Context, cfg config.Config) bool {
+	runtime := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 	if runtime == nil {
 		return cfg.Integrations.Docbank.Enabled()
 	}
 	base := urlFromDaemonRuntime(runtime)
-	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(context.Background(), base, cfg.AuthToken)
-	return err == nil && service.SupportsFileReferences(servicehttp.NewHTTPBackendForServer(base, cfg.AuthToken, capabilities))
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(ctx, base, cfg.AuthToken)
+	return err == nil && service.SupportsFileReferences(ctx, servicehttp.NewHTTPBackendForServer(base, cfg.AuthToken, capabilities))
 }
 
-func (s *mcpDaemonService) SupportsRecallQueries() bool {
+func (s *mcpDaemonService) SupportsRecallQueries(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
+	runtime := FindDaemonRuntime(ctx, s.cfg.DataDir, s.cfg.AuthToken)
 	return runtime == nil || !runtime.ReadOnly
 }
 
 // SupportsFriction asks a running read-only daemon, which may be a
 // ClickHouse replica without friction tables. A writable archive daemon, or
 // the one started on demand, serves the friction reads.
-func (s *mcpDaemonService) SupportsFriction() bool {
+func (s *mcpDaemonService) SupportsFriction(ctx context.Context) bool {
 	s.mu.Lock()
 	cfg := s.cfg
 	s.mu.Unlock()
-	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	runtime := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 	if runtime == nil || !runtime.ReadOnly {
 		return true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(ctx, urlFromDaemonRuntime(runtime), cfg.AuthToken)
 	return err == nil && capabilities.FrictionReadable

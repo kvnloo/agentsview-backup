@@ -19,7 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func (b *httpBackend) SupportsFriction() bool { return b.friction }
+func (b *httpBackend) SupportsFriction(_ context.Context) bool { return b.friction }
 
 // browserPath returns path on the daemon's browser address, or "" when that
 // address is unusable for links.

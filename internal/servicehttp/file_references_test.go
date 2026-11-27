@@ -92,7 +92,7 @@ func TestFileReferencesDiscoveredCapability(t *testing.T) {
 				url = "https://reader.example.com"
 			}
 			svc := servicehttp.NewHTTPBackendForServer(url, "", caps)
-			assert.Equal(t, tc.enabled, service.SupportsFileReferences(svc))
+			assert.Equal(t, tc.enabled, service.SupportsFileReferences(t.Context(), svc))
 		})
 	}
 }

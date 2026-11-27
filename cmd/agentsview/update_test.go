@@ -458,17 +458,17 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 				out, err = exec.CommandContext(ctx, os.Args[0], "daemon", "start").CombinedOutput()
 				require.NoError(t, err, string(out))
 			}
-			rt := FindWritableDaemonRuntime(dir)
+			rt := FindWritableDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			stopped, err := stopWritableDaemonsForUpdate(ctx, cfg)
 			require.NoError(t, err)
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 			require.NoError(t, restartDaemonAfterUpdate(ctx, cfg, stopped))
-			rt = FindWritableDaemonRuntime(dir)
+			rt = FindWritableDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			assert.Equal(t, persistent, rt.Persistent)
 			time.Sleep(5 * time.Second) //nolint:kennlint // sleeptest: the child process uses the real clock for its two-second idle exit.
-			assert.Equal(t, persistent, FindWritableDaemonRuntime(dir) != nil)
+			assert.Equal(t, persistent, FindWritableDaemonRuntime(t.Context(), dir) != nil)
 		})
 	}
 }

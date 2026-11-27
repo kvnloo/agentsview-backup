@@ -14,7 +14,7 @@ var ErrFrictionDigestNotFound = errors.New("friction digest not found")
 // FrictionCapability is implemented by services that can read friction
 // digests and patterns. MCP registers the friction tools only when true.
 type FrictionCapability interface {
-	SupportsFriction() bool
+	SupportsFriction(context.Context) bool
 }
 
 // FrictionService reads stored friction digests, findings and recurrence
@@ -27,9 +27,9 @@ type FrictionService interface {
 }
 
 // SupportsFriction reports whether svc can serve friction reads.
-func SupportsFriction(svc SessionService) bool {
+func SupportsFriction(ctx context.Context, svc SessionService) bool {
 	capability, ok := svc.(FrictionCapability)
-	if !ok || !capability.SupportsFriction() {
+	if !ok || !capability.SupportsFriction(ctx) {
 		return false
 	}
 	_, ok = svc.(FrictionService)

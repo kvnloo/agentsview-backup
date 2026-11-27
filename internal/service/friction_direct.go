@@ -11,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
-func (b *directBackend) SupportsFriction() bool {
+func (b *directBackend) SupportsFriction(_ context.Context) bool {
 	_, ok := b.db.(db.FrictionReader)
 	return ok
 }

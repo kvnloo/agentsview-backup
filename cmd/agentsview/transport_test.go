@@ -366,7 +366,7 @@ func TestDetectTransport_LocalDaemonUnreachableDoesNotSetDirectIncompatible(t *t
 // The startup-wait hook reports no daemon, then discovery falls back to direct.
 func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	waited := false
 	stubWaitForDaemonStartupForTransport(t, func(
@@ -399,7 +399,7 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 	}
 	t.Run("detect", func(t *testing.T) {
 		dir, ctx, progress := setup(t)
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 		stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
 		_, err := detectTransportContext(ctx, dir, "", time.Second)
@@ -416,7 +416,7 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 	})
 	t.Run("startup wait", func(t *testing.T) {
 		dir, ctx, progress := setup(t)
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 		newStartupStateWriter(dir, time.Now).SetPhase("Opening archive")
 		WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
@@ -495,32 +495,6 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 	assert.Contains(t, err.Error(), "no_daemon_autostart")
 }
 
-func TestEnsureTransport_SavedNoDaemonAutostartWaitsForRead(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	cfg, err := config.LoadReadOnlyAt(dir)
-	require.NoError(t, err)
-	setTestVersion(t, "test")
-	host, port := testPingServer(t)
-	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
-	original := detectTransportForSelection
-	calls := 0
-	detectTransportForSelection = func(ctx context.Context, dataDir, token string, wait time.Duration) (transport, error) {
-		calls++
-		if calls == 2 {
-			_, err := WriteDaemonRuntime(dir, host, port, "test", false)
-			require.NoError(t, err)
-		}
-		return original(ctx, dataDir, token, wait)
-	}
-	t.Cleanup(func() { detectTransportForSelection = original; RemoveDaemonRuntime(dir) })
-	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportHTTP, tr.Mode)
-	assert.GreaterOrEqual(t, calls, 2)
-}
-
 func TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
@@ -532,24 +506,65 @@ func TestEnsureTransport_SavedNoDaemonAutostartStopsCachedConfig(t *testing.T) {
 	assert.Equal(t, transportDirect, tr.Mode)
 }
 
-func TestEnsureTransport_SavedNoDaemonAutostartReadCancellation(t *testing.T) {
+func TestManagedDaemonWaitDeadline(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	cfg := config.Config{DataDir: dir, NoDaemonAutostart: true}
-	ctx, cancel := context.WithCancel(t.Context())
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+	cfg := config.Config{DataDir: dir}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
 	defer cancel()
-	original := detectTransportForSelection
-	calls := 0
-	detectTransportForSelection = func(ctx context.Context, dataDir, token string, wait time.Duration) (transport, error) {
-		calls++
-		if calls == 2 {
-			cancel()
-		}
-		return original(ctx, dataDir, token, wait)
-	}
-	t.Cleanup(func() { detectTransportForSelection = original })
+	started := time.Now()
 	_, err := ensureTransportContext(ctx, &cfg, transportIntentRead, time.Second)
-	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
+func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	setTestVersion(t, "test")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	host, port := testPingServer(t)
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_, err := WriteDaemonRuntime(dir, host, port, "test", false)
+		written <- err
+	}()
+	t.Cleanup(func() { require.NoError(t, <-written); RemoveDaemonRuntime(dir) })
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, 2*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+}
+
+func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	cfg, err := config.LoadReadOnlyAt(dir)
+	require.NoError(t, err)
+	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportDirect, tr.Mode)
+	writeTestConfig(t, dir, "no_daemon_autostart = false\n")
+	var starts int
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+	})
+	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 1, starts)
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {
@@ -1029,7 +1044,7 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 	t *testing.T,
 ) {
 	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	var gotWait time.Duration
@@ -1128,7 +1143,7 @@ func TestBackgroundLaunchWaitReportsProgressAndExtendsWhileWorking(t *testing.T)
 		launchLock, ok := acquireBackgroundLaunchLock(dir)
 		require.True(t, ok)
 		t.Cleanup(func() { _ = launchLock.Unlock() })
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 		state := newStartupStateWriter(dir, time.Now)
 		state.SetPhase("Opening archive")
@@ -1263,7 +1278,7 @@ func TestWaitForBackgroundLaunchBeforeArchiveWriteRejectsFileDataDir(
 
 func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	ctx, cancel := context.WithCancel(t.Context())

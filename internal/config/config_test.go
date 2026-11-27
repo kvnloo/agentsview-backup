@@ -38,9 +38,17 @@ func TestNoDaemonAutostartConfig(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(tc.contents), 0o600))
 			cfg, err := LoadReadOnlyAt(dir)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, cfg.NoDaemonAutostart)
+			assert.Equal(t, tc.want, cfg.SavedNoDaemonAutostart)
+			assert.False(t, cfg.NoDaemonAutostart)
 		})
 	}
+	t.Run("later false clears saved value", func(t *testing.T) {
+		cfg := Config{NoDaemonAutostart: true}
+		require.NoError(t, cfg.applyConfigTOML("no_daemon_autostart = true"))
+		require.NoError(t, cfg.applyConfigTOML("no_daemon_autostart = false"))
+		assert.False(t, cfg.SavedNoDaemonAutostart)
+		assert.True(t, cfg.NoDaemonAutostart)
+	})
 }
 
 func TestCodeBuddyDefaultAndOverride(t *testing.T) {

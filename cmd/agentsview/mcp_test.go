@@ -237,7 +237,7 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 			t.Cleanup(cleanup)
 
 			assert.Equal(t, tt.wantRecallCapability,
-				service.SupportsRecallQueries(svc))
+				service.SupportsRecallQueries(t.Context(), svc))
 			assert.Equal(t, 1, probeCount)
 		})
 	}
@@ -595,7 +595,7 @@ func TestMCPDaemonFileReferencesUsesServingCapability(t *testing.T) {
 			if !enabled {
 				cfg.Integrations.Docbank = config.DocbankIntegration{URL: "https://example.com", APIKeyEnv: "DOCBANK_TEST_KEY"}
 			}
-			assert.Equal(t, enabled, service.SupportsFileReferences(newMCPDaemonService(cfg)))
+			assert.Equal(t, enabled, service.SupportsFileReferences(t.Context(), newMCPDaemonService(cfg)))
 		})
 	}
 }
@@ -695,7 +695,7 @@ func TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime(t *testing.T) {
 			writeLiveRuntime(t, dataDir, tt.readOnly)
 			svc := newMCPDaemonService(config.Config{DataDir: dataDir})
 
-			assert.Equal(t, tt.want, service.SupportsRecallQueries(svc))
+			assert.Equal(t, tt.want, service.SupportsRecallQueries(t.Context(), svc))
 		})
 	}
 }
@@ -738,11 +738,11 @@ func TestMCPDaemonServiceFrictionCapabilityFollowsReadOnlyDaemon(t *testing.T) {
 			host, port := splitTestServerURL(t, ts.URL)
 			writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
 			svc := newMCPDaemonService(config.Config{DataDir: dir})
-			assert.Equal(t, tt.readable, service.SupportsFriction(svc))
+			assert.Equal(t, tt.readable, service.SupportsFriction(t.Context(), svc))
 		})
 	}
 	t.Run("no daemon yet", func(t *testing.T) {
 		svc := newMCPDaemonService(config.Config{DataDir: daemonRuntimeDir(t)})
-		assert.True(t, service.SupportsFriction(svc), "the daemon started on demand is an archive daemon")
+		assert.True(t, service.SupportsFriction(t.Context(), svc), "the daemon started on demand is an archive daemon")
 	})
 }

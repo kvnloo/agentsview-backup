@@ -37,7 +37,7 @@ func assertServerIcon(t *testing.T, info *mcp.Implementation, version string) {
 }
 
 func TestServerIconStdio(t *testing.T) {
-	server, client := newInMemoryPair(t, newServer(ServeOptions{Version: "v1.2.3"}))
+	server, client := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Version: "v1.2.3"}))
 	t.Cleanup(func() {
 		require.NoError(t, client.Close())
 		require.NoError(t, server.Wait())
@@ -46,7 +46,7 @@ func TestServerIconStdio(t *testing.T) {
 }
 
 func TestServerIconHTTP(t *testing.T) {
-	server := httptest.NewServer(newHTTPHandler(ServeOptions{}))
+	server := httptest.NewServer(newHTTPHandler(t.Context(), ServeOptions{}))
 	t.Cleanup(server.Close)
 	client := mcp.NewClient(&mcp.Implementation{Name: "synthetic-client", Version: "1"}, nil)
 	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{

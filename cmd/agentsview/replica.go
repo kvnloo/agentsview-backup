@@ -129,7 +129,7 @@ func runReplicaPush(
 
 	// --embed builds in this process, so it never auto-starts a daemon; a
 	// live daemon still wins the writer and rejects the request.
-	appCfg.NoDaemonAutostart = appCfg.NoDaemonAutostart || cfg.Embed
+	appCfg.NoDaemonAutostart = cfg.Embed
 	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentArchiveWrite)
 	if err != nil {
 		return fmt.Errorf("opening writer: %w", err)

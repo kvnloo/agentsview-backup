@@ -369,7 +369,7 @@ func prepareReplicaPushWatch(
 
 	// --embed builds in this process, so it never auto-starts a daemon; a
 	// live daemon still wins the writer and rejects the request.
-	appCfg.NoDaemonAutostart = appCfg.NoDaemonAutostart || cfg.Embed || requireLocal
+	appCfg.NoDaemonAutostart = cfg.Embed || requireLocal
 	appCfg.RequireDaemon = cfg.NoStartDaemon
 	// A watcher that exits with an error records it as a failed push, so a
 	// service manager restarting it builds a failure streak instead of

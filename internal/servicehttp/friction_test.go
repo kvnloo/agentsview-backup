@@ -95,7 +95,7 @@ func TestHTTPFrictionService(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	svc := NewHTTPBackend(ts.URL+"/", "", false, "")
-	require.True(t, service.SupportsFriction(svc))
+	require.True(t, service.SupportsFriction(t.Context(), svc))
 	fs := svc.(service.FrictionService)
 
 	view, err := fs.FrictionDigest(t.Context(), "")
@@ -146,7 +146,7 @@ func TestHTTPFrictionCapabilityFollowsServerStore(t *testing.T) {
 			capabilities, err := ProbeHTTPServerCapabilities(t.Context(), ts.URL, "")
 			require.NoError(t, err)
 			svc := NewHTTPBackendForServer(ts.URL, "", capabilities)
-			assert.Equal(t, tt.want, service.SupportsFriction(svc))
+			assert.Equal(t, tt.want, service.SupportsFriction(t.Context(), svc))
 		})
 	}
 }

@@ -47,7 +47,7 @@ func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			svc := NewHTTPBackend("http://example.test", "", tt.readOnly, "")
-			assert.Equal(t, tt.want, service.SupportsRecallQueries(svc))
+			assert.Equal(t, tt.want, service.SupportsRecallQueries(t.Context(), svc))
 		})
 	}
 }

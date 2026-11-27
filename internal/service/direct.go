@@ -84,7 +84,7 @@ func WithModelGroups(groups ModelGroups) DirectBackendOption {
 // continuation cannot be replayed against a different archive or server.
 func newEvidenceSource() string { return rand.Text() }
 
-func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
+func (b *directBackend) SupportsRecallQueries(_ context.Context) bool { return b.local != nil }
 
 // LocalContentScan reports whether this service searches a local SQLite archive.
 func (b *directBackend) LocalContentScan() bool { return b.local != nil }

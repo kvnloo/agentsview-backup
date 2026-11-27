@@ -1311,10 +1311,10 @@ func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
 		withRuntimeVersion("old"),
 		withRuntimeAPIVersion(daemonAPIVersion-1),
 	)
-	require.True(t, IsLocalDaemonActive(dataDir))
-	require.Nil(t, FindDaemonRuntime(dataDir))
+	require.True(t, IsLocalDaemonActive(t.Context(), dataDir))
+	require.Nil(t, FindDaemonRuntime(t.Context(), dataDir))
 
-	_, err := resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
+	_, err := resolveEmbeddingsDaemonClient(t.Context(), config.Config{DataDir: dataDir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon API version")
 	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
@@ -1337,12 +1337,12 @@ func TestResolveEmbeddingsDaemonClientPrefersIncompatibleWritableDaemonError(
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.Remove(writablePath) })
 
-	compatible := FindDaemonRuntime(dataDir)
+	compatible := FindDaemonRuntime(t.Context(), dataDir)
 	require.NotNil(t, compatible)
 	require.True(t, compatible.ReadOnly)
 	assert.Equal(t, readOnlyEndpoint.Port, compatible.Port)
 
-	_, err = resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
+	_, err = resolveEmbeddingsDaemonClient(t.Context(), config.Config{DataDir: dataDir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon API version")
 	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")

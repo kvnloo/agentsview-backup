@@ -2,7 +2,9 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -898,17 +900,39 @@ func resolveCodeBuddyTargets(ctx context.Context, root string) (dirs, files []st
 		if info, statErr := os.Stat(projects); statErr != nil || !info.IsDir() {
 			continue
 		}
+		// An unreadable projects folder fails resolution like any other
+		// unreadable root; only unreadable folders inside it narrow the
+		// image list below.
+		if openErr := checkReadableDir(projects); openErr != nil {
+			return nil, nil, false, fmt.Errorf("read CodeBuddy projects %s: %w", projects, openErr)
+		}
 		dirs = append(dirs, projects)
 		if catalog := parser.CodeBuddyCatalogForProjects(projects); catalog != "" {
 			files = append(files, catalog, catalog+"-wal", catalog+"-shm", catalog+"-journal")
 		}
+		// The archive skips project folders it cannot read, so the images
+		// found in the readable ones still travel with their transcripts.
 		blobs, blobErr := parser.CodeBuddyReferencedBlobs(ctx, projects)
-		if blobErr != nil {
+		if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](blobErr); blobErr != nil &&
+			(!incomplete || ctx.Err() != nil) {
 			return nil, nil, false, fmt.Errorf("list CodeBuddy images under %s: %w", projects, blobErr)
 		}
 		files = append(files, blobs...)
 	}
 	return dirs, files, legacy, nil
+}
+
+// checkReadableDir reports whether dir can be listed.
+func checkReadableDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // resolvePoolsideTarget narrows a Poolside application-data root to

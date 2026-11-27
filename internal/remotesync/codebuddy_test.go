@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -77,6 +78,60 @@ func TestCodeBuddyRemoteTargetsCarryCatalogAndReferencedImages(t *testing.T) {
 	var title string
 	require.NoError(t, reader.QueryRowContext(t.Context(), "SELECT title FROM conversations").Scan(&title))
 	assert.Equal(t, "Remote title", title, "the snapshot includes WAL-only writes")
+}
+
+// One unreadable project folder must not stop the readable conversations and
+// their images from syncing.
+func TestCodeBuddyRemoteTargetsSkipUnreadableProject(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	home, _ := writeCodeBuddyRemoteHome(t)
+	locked := filepath.Join(home, "projects", "-locked")
+	require.NoError(t, os.MkdirAll(locked, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(locked, "run-2.jsonl"), []byte("{}\n"), 0o600))
+	require.NoError(t, os.Chmod(locked, 0))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	targets, err := ResolveTargets(t.Context(), config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCodeBuddy: {home},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(home, "projects")}, targets.Dirs[parser.AgentCodeBuddy])
+	extra := targets.ProviderExtraFiles[parser.AgentCodeBuddy]
+	assert.Contains(t, extra, filepath.Join(home, parser.CodeBuddyCatalogDBName))
+	used := strings.Repeat("ab", 32)
+	assert.Contains(t, extra, filepath.Join(home, "blobs", used[:2], used+".png"),
+		"the readable project's image still travels")
+
+	var archive bytes.Buffer
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
+	names := strings.Join(keys(archiveEntries(t, archive.Bytes())), "\n")
+	assert.Contains(t, names, "run-1.jsonl")
+	assert.Contains(t, names, used+".png")
+}
+
+// An unreadable projects folder still fails resolution, so the receiver does
+// not evict its copy of every conversation over a read error.
+func TestCodeBuddyRemoteTargetsFailOnUnreadableProjects(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	home, _ := writeCodeBuddyRemoteHome(t)
+	projects := filepath.Join(home, "projects")
+	require.NoError(t, os.Chmod(projects, 0))
+	t.Cleanup(func() { _ = os.Chmod(projects, 0o755) })
+
+	_, err := ResolveTargets(t.Context(), config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCodeBuddy: {home},
+	}})
+	require.Error(t, err)
 }
 
 func TestImporterReadsCodeBuddyCatalogFromRemoteHome(t *testing.T) {

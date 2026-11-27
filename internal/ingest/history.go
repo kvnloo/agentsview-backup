@@ -391,9 +391,13 @@ func keepCodeBuddyLegacyCompanionData(
 }
 
 // keepCodeBuddyLegacyUsage carries each archived 4.x request total whose
-// identity the parse lacks as a hidden usage row at its place in time, as
-// the parser adds a total whose reply the transcript no longer holds, so
-// the request still counts once.
+// identity the parse lacks. A total the archive stored on a visible reply
+// goes back onto that reply, with its cb4: identity, as the parser puts it
+// there while the 4.x directory reads, so pins and notes stay on the reply.
+// A total whose reply the parse no longer holds, or that the archive stored
+// as a hidden usage row, becomes a hidden usage row at its place in time, as
+// the parser adds a total whose reply the transcript no longer holds, so the
+// request still counts once.
 func keepCodeBuddyLegacyUsage(
 	messages *[]db.Message, archived []db.Message, sessionID string,
 ) bool {
@@ -401,7 +405,7 @@ func keepCodeBuddyLegacyUsage(
 	for _, m := range *messages {
 		present[m.SourceUUID] = true
 	}
-	changed := false
+	changed, inserted := false, false
 	for _, old := range archived {
 		hasContext, hasOutput := old.TokenPresence()
 		if !strings.HasPrefix(old.SourceUUID, "cb4:") || present[old.SourceUUID] ||
@@ -410,6 +414,18 @@ func keepCodeBuddyLegacyUsage(
 		}
 		present[old.SourceUUID] = true
 		changed = true
+		if i := codebuddyLegacyUsageReply(*messages, old); i >= 0 {
+			m := &(*messages)[i]
+			m.TokenUsage = old.TokenUsage
+			m.ContextTokens, m.HasContextTokens = old.ContextTokens, hasContext
+			m.OutputTokens, m.HasOutputTokens = old.OutputTokens, hasOutput
+			m.SourceUUID = old.SourceUUID
+			if m.Model == "" {
+				m.Model = old.Model
+			}
+			continue
+		}
+		inserted = true
 		row := db.Message{
 			SessionID: sessionID, Role: string(parser.RoleAssistant),
 			IsSystem: true, Timestamp: old.Timestamp,
@@ -429,12 +445,40 @@ func keepCodeBuddyLegacyUsage(
 		}
 		*messages = slices.Insert(*messages, at, row)
 	}
-	if changed {
+	if inserted {
 		for i := range *messages {
 			(*messages)[i].Ordinal = i
 		}
 	}
 	return changed
+}
+
+// codebuddyLegacyUsageReply returns the index of the parsed reply that held
+// the archived visible reply old's 4.x total, or -1. The reply has no usage
+// or identity of its own and the same timestamp; content breaks a tie, and a
+// reply that stays ambiguous matches nothing.
+func codebuddyLegacyUsageReply(messages []db.Message, old db.Message) int {
+	if old.IsSystem || old.Role != string(parser.RoleAssistant) {
+		return -1
+	}
+	var same []int
+	for i, m := range messages {
+		hasContext, hasOutput := m.TokenPresence()
+		if m.Role == old.Role && !m.IsSystem && m.SourceUUID == "" &&
+			!hasContext && !hasOutput && len(m.TokenUsage) == 0 &&
+			m.Timestamp == old.Timestamp {
+			same = append(same, i)
+		}
+	}
+	if len(same) > 1 {
+		same = slices.DeleteFunc(same, func(i int) bool {
+			return messages[i].Content != old.Content
+		})
+	}
+	if len(same) != 1 {
+		return -1
+	}
+	return same[0]
 }
 
 const (

@@ -5809,12 +5809,17 @@ schemas keep their existing ordering behavior.
     full fingerprint decides their freshness.
   - When a converted transcript's 4.x directory does not read in full, sync
     keeps what the archived copy read there: each `cb4:` request total the
-    parse lacks, as a hidden usage row, and each saved image link that the
-    parse shows as unavailable, matched by message source UUID and image
-    position. The directory does not read in full when it is missing, its
-    `index.json` is missing or is not an object with a `messages` array
-    (the check the 4.x reader applies), an assistant message file it lists
-    is missing or invalid, or a `codebuddy-asset://` image cannot be read.
+    parse lacks, and each saved image link that the parse shows as
+    unavailable, matched by message source UUID and image position. A total
+    the archive stored on a visible reply goes back onto the parsed reply with
+    the same timestamp that has no usage or source UUID, with content breaking
+    a tie, so the reply keeps its `cb4:` identity and its pins and notes. A
+    total with no single matching reply, or one the archive stored as a hidden
+    usage row, stays as a hidden usage row. The directory does not read in
+    full when it is missing, its `index.json` is missing or is not an object
+    with a `messages` array (the check the 4.x reader applies), an assistant
+    message file it lists is missing or invalid, or a `codebuddy-asset://`
+    image cannot be read.
     Totals and images the directory still reads, including explicit zeros,
     replace the archived ones. A branch that a rewind just created has no
     archive of its own, so its image links come from the other retained

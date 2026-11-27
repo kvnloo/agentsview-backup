@@ -13734,7 +13734,8 @@ func (e *Engine) processAndWriteSessionFile(
 	resolved := 0
 	writtenIDs := make([]string, 0, len(res.results))
 	markSourceIncomplete := func() {
-		if file.Agent == parser.AgentClaude {
+		if file.Agent == parser.AgentClaude ||
+			(atomicDAG && file.Agent == parser.AgentCodeBuddy) {
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
 		}
 	}
@@ -13870,13 +13871,20 @@ func (e *Engine) processAndWriteSessionFile(
 	return preserved, sessionsChanged, nil
 }
 
+// sourceRequiresAtomicDAGCompletion reports a source whose several sessions
+// count as current only together: a Claude-format DAG transcript and its
+// branches, or a CodeBuddy transcript with its rewound branches and side
+// questions. Each session is written stale and promoted once every active
+// one is saved, so a failed save leaves the whole source to retry even when
+// its file does not change again. Sessions the user trashed or excluded
+// count as saved.
 func sourceRequiresAtomicDAGCompletion(
 	agent parser.AgentType, resultCount int,
 ) bool {
 	if resultCount <= 1 {
 		return false
 	}
-	return isClaudeFormatAgent(agent)
+	return isClaudeFormatAgent(agent) || agent == parser.AgentCodeBuddy
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(

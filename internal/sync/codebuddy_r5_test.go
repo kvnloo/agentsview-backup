@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // cbcPersistedTurn is one CodeBuddy turn whose tool output was saved to side.
@@ -77,4 +81,75 @@ func TestSyncCodeBuddyNewerCopyRewindKeepsRemovedOutput(t *testing.T) {
 				"the conversation no longer holds the rewound call")
 		})
 	}
+}
+
+// When saving one branch of a CodeBuddy conversation fails, the next sync
+// saves it even though the transcript has not changed since.
+func TestSyncCodeBuddyFailedBranchSaveRetries(t *testing.T) {
+	home, project := cbcSyncHome(t)
+	transcript := filepath.Join(project, "s1.jsonl")
+	writeCBCSync(t, transcript, append(cbcPersistedTurn(filepath.Join(project, "s1", "tool-results", "c1.txt")), cbcRewind...)...)
+	database := openTestDB(t)
+	raw, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.ExecContext(t.Context(), `
+		CREATE TRIGGER fail_codebuddy_branch_insert
+		BEFORE INSERT ON sessions
+		WHEN NEW.id = 'codebuddy:s1-u1'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected CodeBuddy branch write failure');
+		END;
+	`)
+	require.NoError(t, err)
+
+	engine := newCBCEngine(t, database, home)
+	failed := engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, failed.Failed)
+	main, err := database.GetSession(t.Context(), "codebuddy:s1")
+	require.NoError(t, err)
+	require.NotNil(t, main, "the conversation saves before the branch fails")
+	branch, err := database.GetSession(t.Context(), "codebuddy:s1-u1")
+	require.NoError(t, err)
+	require.Nil(t, branch)
+
+	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_codebuddy_branch_insert`)
+	require.NoError(t, err)
+	retry := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, retry.Failed)
+	branch, err = database.GetSession(t.Context(), "codebuddy:s1-u1")
+	require.NoError(t, err)
+	require.NotNil(t, branch, "the unchanged transcript retries the failed branch")
+	for _, id := range []string{"codebuddy:s1", "codebuddy:s1-u1"} {
+		assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), id), id)
+	}
+	_, hasDigest, err := database.GetProviderStatHash(t.Context(), parser.AgentCodeBuddy, transcript)
+	require.NoError(t, err)
+	assert.True(t, hasDigest, "a complete save marks the transcript current")
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced, "a current transcript is not saved again")
+}
+
+// A branch the user moved to trash does not keep its conversation from being
+// marked current.
+func TestSyncCodeBuddyTrashedBranchLeavesConversationCurrent(t *testing.T) {
+	home, project := cbcSyncHome(t)
+	transcript := filepath.Join(project, "s1.jsonl")
+	lines := append(cbcPersistedTurn(filepath.Join(project, "s1", "tool-results", "c1.txt")), cbcRewind...)
+	writeCBCSync(t, transcript, lines...)
+	database := openTestDB(t)
+	engine := newCBCEngine(t, database, home)
+	engine.SyncAll(t.Context(), nil)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "codebuddy:s1-u1"))
+
+	writeCBCSync(t, transcript, append(lines,
+		`{"id":"u3","parentId":"a2","type":"message","role":"user","timestamp":1767225607000,"content":[{"type":"input_text","text":"more"}]}`,
+	)...)
+	synced := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, synced.Failed)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codebuddy:s1"))
+	assert.True(t, database.IsSessionTrashed(t.Context(), "codebuddy:s1-u1"), "the branch stays in trash")
+	_, hasDigest, err := database.GetProviderStatHash(t.Context(), parser.AgentCodeBuddy, transcript)
+	require.NoError(t, err)
+	assert.True(t, hasDigest, "the trashed branch counts as resolved")
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced, "a current transcript is not saved again")
 }

@@ -29,6 +29,9 @@ type codebuddyBlobAssets struct {
 	home         string
 	assetsDir    string
 	legacyAssets string
+	// readOnly computes references and reads verified copies in assetsDir
+	// without saving images there, for report-only parses.
+	readOnly bool
 	// storeFailed records an image that was read but could not be saved in
 	// the asset store, so the parse is retried once the store is writable.
 	storeFailed *atomic.Bool
@@ -46,8 +49,9 @@ const (
 )
 
 // ImageReference returns the asset reference for one attached image. Without
-// an asset directory it still computes the content-addressed reference so the
-// parse stays deterministic; writing happens only when assetsDir is set.
+// an asset directory, or in read-only mode, it still computes the
+// content-addressed reference so the parse stays deterministic; writing
+// happens only when assetsDir is set and the parse may write.
 // An image the store cannot save reports false and is recorded in
 // storeFailed.
 func (a codebuddyBlobAssets) ImageReference(ref codebuddyImageRef) (string, bool) {
@@ -66,7 +70,7 @@ func (a codebuddyBlobAssets) resolve(ref codebuddyImageRef) (string, codebuddyIm
 		}
 		return "", codebuddyImageMissing
 	}
-	if a.assetsDir == "" {
+	if a.assetsDir == "" || a.readOnly {
 		asset, err := assets.Reference(mediaType, body)
 		if err != nil {
 			return "", codebuddyImageMissing

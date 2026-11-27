@@ -29,6 +29,9 @@ type codebuddyCBCSource struct {
 type codebuddyCBCSourceSet struct {
 	roots     []string
 	assetsDir string
+	// assetsReadOnly reads verified copies in assetsDir without saving
+	// new images there, for report-only parses.
+	assetsReadOnly bool
 	// legacyRoots are the configured 4.x roots. A converted conversation
 	// reads its pre-conversion usage from them.
 	legacyRoots []string
@@ -251,7 +254,9 @@ func (s codebuddyCBCSourceSet) sourcesForCatalogChange(
 	if err != nil {
 		return nil, err
 	}
-	one := codebuddyCBCSourceSet{roots: []string{root}, assetsDir: s.assetsDir}
+	one := codebuddyCBCSourceSet{
+		roots: []string{root}, assetsDir: s.assetsDir, assetsReadOnly: s.assetsReadOnly,
+	}
 	if !known {
 		// No earlier read to compare against: fingerprints still skip
 		// sessions whose rows did not change.
@@ -654,7 +659,7 @@ func (s codebuddyCBCSourceSet) Parse(
 		}
 		in.opts.assets = codebuddyBlobAssets{
 			home: filepath.Dir(filepath.Clean(root)), assetsDir: s.assetsDir,
-			storeFailed: &imageStoreFailed,
+			readOnly: s.assetsReadOnly, storeFailed: &imageStoreFailed,
 		}
 	}
 	in.opts.persisted = codebuddyPersistedOutputReader(path, req.StoredPathResolver, req.Machine)

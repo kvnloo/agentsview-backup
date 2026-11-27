@@ -72,6 +72,10 @@ type ProviderConfig struct {
 	// attach user images write them here and reference them as asset://
 	// links; an empty value keeps references without writing files.
 	AssetsDir string
+	// AssetsReadOnly keeps a report-only parse from writing to AssetsDir.
+	// References are still computed, and verified copies already in
+	// AssetsDir still stand in for originals that are gone.
+	AssetsReadOnly bool
 	// PathRewriter maps an on-disk source path to its canonical stored form.
 	// It is non-nil only during remote sync, where source files are read
 	// from a temporary extraction directory but must keep a stable identity

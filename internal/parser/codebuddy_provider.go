@@ -63,6 +63,7 @@ func (f codebuddyProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		cbc:    newCodeBuddyCBCSourceSet(cbcRoots, cfg.AssetsDir),
 	}
 	p.cbc.legacyRoots = legacyRoots
+	p.cbc.assetsReadOnly = cfg.AssetsReadOnly
 	return p
 }
 

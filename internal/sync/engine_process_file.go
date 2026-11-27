@@ -635,13 +635,15 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 	machine := e.machineForFile(file)
+	assetsDir, assetsReadOnly := e.providerAssetsDir()
 	providerConfig := parser.ProviderConfig{
 		Roots:                 e.sources().agentDirs[file.Agent],
 		Machine:               e.machine,
 		StableSourceSnapshots: e.stableSourceSnapshots,
 		SourceMachines:        e.sources().sourceMachines[file.Agent],
 		PathRewriter:          e.pathRewriter,
-		AssetsDir:             e.providerAssetsDir(),
+		AssetsDir:             assetsDir,
+		AssetsReadOnly:        assetsReadOnly,
 	}
 	provider := factory.NewProvider(providerConfig)
 

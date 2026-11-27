@@ -5822,6 +5822,8 @@ schemas keep their existing ordering behavior.
     earlier import saved, after checking its digest; an image never saved
     stays a placeholder. An image the asset store fails to save marks the
     parse for retry, so an ordinary sync saves it once the store is writable.
+    A report-only `parse-diff` run computes the same links and reads saved
+    copies, but saves no images.
   - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
     member name, otherwise the subagent preset name. The CLI writes that name
     to each subagent item's `providerData.agent`; main transcripts carry

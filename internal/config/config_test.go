@@ -30,16 +30,15 @@ func TestNoDaemonAutostartConfig(t *testing.T) {
 		want     bool
 	}{
 		{"omitted", "", false},
-		{"false", "no_daemon_autostart = false\n", false},
 		{"true", "no_daemon_autostart = true\n", true},
+		{"unused invalid section", "no_daemon_autostart = true\n[insights]\nmodel = 'incomplete'\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(tc.contents), 0o600))
-			cfg, err := LoadReadOnlyAt(dir)
+			saved, err := LoadSavedNoDaemonAutostart(dir)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, cfg.SavedNoDaemonAutostart)
-			assert.False(t, cfg.NoDaemonAutostart)
+			assert.Equal(t, tc.want, saved)
 		})
 	}
 }

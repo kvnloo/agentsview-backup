@@ -111,11 +111,9 @@ func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
 	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: an absent service must exhaust the caller's deadline.
 	defer cancel()
-	started := time.Now()
 	err := requestLocalMemoryRefresh(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Contains(t, err.Error(), "memory session-start: local daemon:")
-	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

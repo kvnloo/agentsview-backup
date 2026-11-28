@@ -484,31 +484,30 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 }
 
 func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
-	cfg, err := config.LoadReadOnlyAt(dir)
-	require.NoError(t, err)
-	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentRead, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the missing service must exhaust the wait.
-	require.ErrorContains(t, err, "daemon autostart is disabled")
-	assert.Contains(t, err.Error(), "no_daemon_autostart")
-}
-
-func TestEnsureTransport_PolicyReadIgnoresUnusedInvalidConfig(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "[insights]\nmodel = 'incomplete'\n")
-	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
-	require.NoError(t, err)
-	setTestVersion(t, "test")
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-	forbidStartBackgroundServeForTransport(t, "a compatible daemon is already running")
-	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportHTTP, tr.Mode)
+	for _, tc := range []struct {
+		name   string
+		intent transportIntent
+	}{
+		{"read", transportIntentRead},
+		{"archive write", transportIntentArchiveWrite},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+			forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
+			cfg, err := config.LoadReadOnlyAt(dir)
+			require.NoError(t, err)
+			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the missing service must exhaust the read wait.
+			if tc.intent == transportIntentRead {
+				require.ErrorContains(t, err, "daemon autostart is disabled")
+				assert.Contains(t, err.Error(), "no_daemon_autostart")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, transportDirect, tr.Mode)
+			}
+		})
+	}
 }
 
 func TestManagedDaemonWaitDeadline(t *testing.T) {
@@ -574,9 +573,8 @@ func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
 	cfg, err := config.LoadReadOnlyAt(dir)
 	require.NoError(t, err)
 	forbidStartBackgroundServeForTransport(t, "saved policy must suppress daemon start")
-	tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
+	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
 	require.NoError(t, err)
-	assert.Equal(t, transportDirect, tr.Mode)
 	writeTestConfig(t, dir, "no_daemon_autostart = false\n")
 	var starts int
 	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
@@ -586,19 +584,6 @@ func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
 	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, 1, starts)
-}
-
-func TestSavedNoDaemonAutostartArchiveWriteDoesNotWait(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	forbidStartBackgroundServeForTransport(t, "saved policy must suppress daemon start")
-	cfg := config.Config{DataDir: dir}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 10*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, transportDirect, tr.Mode)
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {

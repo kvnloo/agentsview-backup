@@ -286,7 +286,7 @@ func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime,
 		}
 		return startBackgroundServeForTransport(ctx, cfg, startupWaitTimeout, false)
 	}
-	return nil, errors.New("start a writable daemon with `agentsview daemon start`, then retry")
+	return nil, errors.New("export requires a writable daemon; restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use, then retry")
 }
 
 func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {

@@ -1051,6 +1051,30 @@ func testExportFailureRecovery(t *testing.T, mode string, verify func(*testing.T
 }
 
 func TestExportDaemonStartupCases(t *testing.T) {
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	for _, tc := range []struct {
+		name     string
+		readOnly bool
+	}{
+		{"saved policy with read-only mirror", true},
+		{"saved policy without daemon", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testDataDir(t)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+			if tc.readOnly {
+				host, port := testPingServer(t)
+				writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
+			}
+			forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+			cfg := config.Config{DataDir: dir}
+			_, err := startExportDaemon(t.Context(), &cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "service")
+			assert.Contains(t, err.Error(), "if no service manager is in use")
+		})
+	}
 	t.Run("startup error", func(t *testing.T) {
 		dir := testDataDir(t)
 		failure := errors.New("launch failed")

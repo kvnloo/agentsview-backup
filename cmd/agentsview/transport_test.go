@@ -502,6 +502,12 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 			if tc.intent == transportIntentRead {
 				require.ErrorContains(t, err, "daemon autostart is disabled")
 				assert.Contains(t, err.Error(), "no_daemon_autostart")
+				assert.Contains(t, err.Error(), "service")
+				assert.Contains(t, err.Error(), "if no service manager is in use")
+				var diagnostic *cliDiagnosticError
+				require.ErrorAs(t, err, &diagnostic)
+				assert.Contains(t, diagnostic.hint, "service")
+				assert.Contains(t, diagnostic.hint, "if no service manager is in use")
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, transportDirect, tr.Mode)
@@ -534,25 +540,38 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		intent transportIntent
+		auth   bool
 	}{
-		{"read", transportIntentRead},
-		{"writable daemon", transportIntentWritableDaemon},
+		{"read", transportIntentRead, false},
+		{"writable daemon", transportIntentWritableDaemon, false},
+		{"read with new token", transportIntentRead, true},
+		{"writable daemon with new token", transportIntentWritableDaemon, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
 			forbidStartBackgroundServeForTransport(t, "managed service owns startup")
 			setTestVersion(t, "test")
 			setStartProbeTickForTest(t, 10*time.Millisecond)
-			host, port := testPingServer(t)
+			var host string
+			var port int
+			if tc.auth {
+				host, port = testAuthenticatedPingServer(t, "generated-token")
+			} else {
+				host, port = testPingServer(t)
+			}
 			original := listDaemonRuntimeRecords
 			published := false
 			listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 				records, err := original(store)
 				if !published {
 					published = true
-					_, writeErr := WriteDaemonRuntime(dir, host, port, "test", false)
+					if tc.auth {
+						writeTestConfig(t, dir, "no_daemon_autostart = true\nrequire_auth = true\nauth_token = 'generated-token'\n")
+					}
+					_, writeErr := WriteDaemonRuntimeWithAuth(dir, host, port, "test", "", false, tc.auth)
 					require.NoError(t, writeErr)
 				}
 				return records, err
@@ -562,6 +581,9 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 2*time.Second)
 			require.NoError(t, err)
 			assert.Equal(t, transportHTTP, tr.Mode)
+			if tc.auth {
+				assert.Equal(t, "generated-token", cfg.AuthToken)
+			}
 		})
 	}
 }

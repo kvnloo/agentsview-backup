@@ -337,7 +337,7 @@ func ensureTransportContext(
 				if intent == transportIntentRead {
 					return transport{}, errors.New(
 						"daemon restart required: running daemon version differs from this client; " +
-							"restart the service managing agentsview, or run `agentsview daemon restart` if no service manager is in use; unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml to allow automatic replacement",
+							"restart the service managing agentsview, or run `agentsview daemon restart` if no service manager is in use; to replace it automatically, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml",
 					)
 				}
 				return tr, nil
@@ -381,11 +381,10 @@ func ensureTransportContext(
 	if intent == transportIntentRead {
 		if autostartDisabled {
 			return transport{}, cliUnavailableError(errors.New(
-				"daemon autostart is disabled; direct SQLite reads are "+
-					"not supported for this command. Start a daemon with "+
-					"`agentsview daemon start` or unset "+
-					"AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml",
-			), "run `agentsview daemon start`, then retry; unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml only if this command should start a daemon automatically")
+				"daemon autostart is disabled by AGENTSVIEW_NO_DAEMON or no_daemon_autostart; "+
+					"direct SQLite reads are not supported for this command; restart the service managing agentsview, "+
+					"or run `agentsview daemon start` if no service manager is in use",
+			), "restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use, then retry; to start a daemon automatically, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml")
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
@@ -444,16 +443,16 @@ func ensureTransportContext(
 
 func waitForManagedDaemon(ctx, waitCtx context.Context, cfg *config.Config, timeout time.Duration, needWritable bool) (transport, error) {
 	if needWritable {
-		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(waitCtx, cfg.DataDir, timeout)
+		_, err := waitForBackgroundLaunchBeforeArchiveWrite(waitCtx, cfg.DataDir, timeout)
 		if err != nil && !errors.Is(err, errServeStartupInProgress) && waitCtx.Err() == nil {
 			return transport{}, err
-		}
-		if waited && cfg.AuthToken == "" {
-			adoptBackgroundLaunchConfig(cfg)
 		}
 	}
 	var tr transport
 	for waitCtx.Err() == nil {
+		if cfg.AuthToken == "" {
+			adoptBackgroundLaunchConfig(cfg)
+		}
 		var err error
 		tr, err = detectTransportContext(waitCtx, cfg.DataDir, cfg.AuthToken, timeout)
 		if err != nil && !errors.Is(err, errServeStartupInProgress) && waitCtx.Err() == nil {
@@ -590,7 +589,7 @@ func guardDaemonAutoStartConfig(cfg config.Config) error {
 		return fmt.Errorf("loading daemon configuration: %w", err)
 	}
 	if effective.SavedNoDaemonAutostart {
-		return errors.New("daemon autostart is disabled by no_daemon_autostart in config.toml; run `agentsview daemon start`, or remove the setting to start a daemon automatically")
+		return errors.New("daemon autostart is disabled by no_daemon_autostart in config.toml; restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use; to start a daemon automatically, remove the setting")
 	}
 	host := strings.TrimSpace(effective.Host)
 	if host == "" || effective.RequireAuth || isLoopbackHost(host) {

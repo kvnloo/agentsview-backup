@@ -1968,6 +1968,31 @@ func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
 	assert.Equal(t, []string{"messages", "recall"}, stores)
 }
 
+func TestEmbeddingsSwitchDoesNotStartStoppedManagedDaemon(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dataDir, "no_daemon_autostart = true\n[vector]\nenabled = false\n")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	oldRestart := restartEmbeddingsDaemon
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	var restarted bool
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		restarted = true
+		return errors.New("unexpected background restart")
+	}
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
+	require.Error(t, err)
+	assert.False(t, restarted, "the service manager owns daemon startup")
+	assert.Contains(t, err.Error(), "service")
+	assert.Contains(t, err.Error(), "no_daemon_autostart")
+	assert.Contains(t, err.Error(), "agentsview index embeddings build")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
+}
+
 func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
 	home := testutil.PrivateTempDir(t)
 	require.NoError(t, os.Chmod(home, 0o700))

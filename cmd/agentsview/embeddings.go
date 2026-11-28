@@ -171,8 +171,8 @@ func runEmbeddingsSwitch(
 		}
 		directBuildLock = nil
 	}
-	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
-		return fmt.Errorf("embedding server saved, but daemon restart failed: %w; fix it, then rerun 'agentsview index embeddings switch' to start the rebuild", err)
+	if err := restartEmbeddingsAfterSwitch(ctx, out, cfg); err != nil {
+		return err
 	}
 
 	cfg, err = config.LoadReadOnlyFor(config.ScopeLocal)
@@ -228,6 +228,18 @@ func runEmbeddingsSwitch(
 		}
 	}
 	return errors.Join(buildErrors...)
+}
+
+// restartEmbeddingsAfterSwitch restarts the daemon unless the saved policy
+// leaves daemon startup to a managed service.
+func restartEmbeddingsAfterSwitch(ctx context.Context, out io.Writer, cfg config.Config) error {
+	if cfg.SavedNoDaemonAutostart {
+		return errors.New("embedding server saved; no_daemon_autostart skipped the daemon restart. Restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use, then run `agentsview index embeddings build`")
+	}
+	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
+		return fmt.Errorf("embedding server saved, but daemon restart failed: %w; fix it, then rerun 'agentsview index embeddings switch' to start the rebuild", err)
+	}
+	return nil
 }
 
 // pauseEmbeddingsSwitchBuilds pauses daemon builds, or waits for the direct

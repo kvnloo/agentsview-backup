@@ -250,14 +250,16 @@ func ensureTransportContext(
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return transport{}, fmt.Errorf("loading daemon auth: %w", err)
 	}
+	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
+	// invocation only, without touching the process environment.
 	invocationNoAutostart := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
 	var saved, savedLoaded bool
 	loadSaved := func() (bool, error) {
 		if !savedLoaded {
 			var err error
-			saved, err = savedNoDaemonAutostart(cfg.DataDir)
+			saved, err = config.LoadSavedNoDaemonAutostart(cfg.DataDir)
 			if err != nil {
-				return false, err
+				return false, fmt.Errorf("loading daemon configuration: %w", err)
 			}
 			savedLoaded = true
 		}
@@ -275,27 +277,29 @@ func ensureTransportContext(
 			return transport{}, err
 		}
 	}
+	if intent == transportIntentArchiveWrite && !managedWait {
+		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
+			ctx, cfg.DataDir, waitTimeout,
+		)
+		if err != nil {
+			return transport{}, err
+		}
+		if waited && cfg.AuthToken == "" {
+			adoptBackgroundLaunchConfig(cfg)
+		}
+	}
 	waitCtx := ctx
+	var tr transport
+	var err error
 	if managedWait {
 		var cancel context.CancelFunc
 		waitCtx, cancel = context.WithTimeout(ctx, min(waitTimeout, 2*time.Second))
 		defer cancel()
-	}
-	var tr transport
-	var err error
-	if managedWait {
 		tr, err = waitForManagedDaemon(ctx, waitCtx, cfg, waitTimeout, needWritable)
 	} else {
-		if intent == transportIntentArchiveWrite {
-			waited, waitErr := waitForBackgroundLaunchBeforeArchiveWrite(ctx, cfg.DataDir, waitTimeout)
-			if waitErr != nil {
-				return transport{}, waitErr
-			}
-			if waited && cfg.AuthToken == "" {
-				adoptBackgroundLaunchConfig(cfg)
-			}
-		}
-		tr, err = detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, waitTimeout)
+		tr, err = detectTransportContext(
+			ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+		)
 	}
 	if err != nil {
 		return transport{}, err
@@ -469,14 +473,6 @@ func waitForManagedDaemon(ctx, waitCtx context.Context, cfg *config.Config, time
 		return transport{}, err
 	}
 	return transport{}, nil
-}
-
-func savedNoDaemonAutostart(dataDir string) (bool, error) {
-	saved, err := config.LoadSavedNoDaemonAutostart(dataDir)
-	if err != nil {
-		return false, fmt.Errorf("loading daemon configuration: %w", err)
-	}
-	return saved, nil
 }
 
 func waitForBackgroundLaunchBeforeArchiveWrite(

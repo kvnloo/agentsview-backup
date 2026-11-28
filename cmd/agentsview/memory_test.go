@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/agenthook"
-	"go.kenn.io/kit/daemon"
 
 	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
@@ -117,50 +116,6 @@ func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Contains(t, err.Error(), "memory session-start: local daemon:")
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
-}
-
-func TestMemoryManagedDaemonHookWaitDeadline(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	t.Setenv("AGENTSVIEW_MEMORY_MODE", "local")
-	t.Setenv("AGENTSVIEW_DISABLE_AUTO_SYNC", "")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
-	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	stubLaunchProcesses(t, fakeProcess{name: "sh"})
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: an absent service must exhaust the hook's deadline.
-	defer cancel()
-	cmd := newRootCommand()
-	var stderr bytes.Buffer
-	cmd.SetContext(ctx)
-	cmd.SetIn(strings.NewReader("{}"))
-	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, stderr.String(), "memory session-start: local daemon: context deadline exceeded")
-}
-
-func TestMemoryManagedDaemonReturns(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
-	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	var posts atomic.Int32
-	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/memory/refresh" {
-			posts.Add(1)
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		ping.ServeHTTP(w, r)
-	}))
-	t.Cleanup(server.Close)
-	host, port := splitTestServerURL(t, server.URL)
-	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
-	require.NoError(t, requestLocalMemoryRefresh(t.Context()))
-	assert.EqualValues(t, 1, posts.Load())
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

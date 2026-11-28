@@ -119,6 +119,27 @@ func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
+func TestMemoryManagedDaemonHookWaitDeadline(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	t.Setenv("AGENTSVIEW_MEMORY_MODE", "local")
+	t.Setenv("AGENTSVIEW_DISABLE_AUTO_SYNC", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	stubLaunchProcesses(t, fakeProcess{name: "sh"})
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: an absent service must exhaust the hook's deadline.
+	defer cancel()
+	cmd := newRootCommand()
+	var stderr bytes.Buffer
+	cmd.SetContext(ctx)
+	cmd.SetIn(strings.NewReader("{}"))
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, stderr.String(), "memory session-start: local daemon: context deadline exceeded")
+}
+
 func TestMemoryManagedDaemonReturns(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)

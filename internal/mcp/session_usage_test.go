@@ -127,7 +127,7 @@ func sessionUsageBackends(t *testing.T) map[string]service.SessionService {
 
 func newSessionUsageClient(t *testing.T, svc service.SessionService) *mcp.ClientSession {
 	t.Helper()
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: svc}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
 	t.Cleanup(func() {
 		require.NoError(t, ct.Close())
 		require.NoError(t, st.Wait())

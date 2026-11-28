@@ -19,13 +19,8 @@ The latest release is
 
 **Bug fixes**
 
-- A `serve` service run by systemd or launchd no longer stays down after a
-  restart because an agent hook started its own server in the gap. Set
-  `no_daemon_autostart = true` in `config.toml` to stop every command and agent
-  hook for that data directory from starting or replacing a server, including
-  agent sessions that were already running. The session-start hook then waits
-  briefly for the service to come back and starts nothing. See
-  [CLI daemon behavior](/docs/commands/#cli-daemon-behavior).
+- Set `no_daemon_autostart = true` in `config.toml` to keep commands and agent
+  hooks from starting a competing server during a managed service restart.
 
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.

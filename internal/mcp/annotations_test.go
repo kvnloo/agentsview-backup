@@ -14,7 +14,7 @@ func TestToolAnnotations(t *testing.T) {
 	for _, profile := range []Profile{ProfileFull, ProfileMemory} {
 		t.Run(string(profile), func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
-			srv := newServer(t.Context(), ServeOptions{
+			srv := newServer(ServeOptions{
 				Service: service.NewDirectBackend(d, nil, withTestDocbank()),
 				Profile: profile,
 			})

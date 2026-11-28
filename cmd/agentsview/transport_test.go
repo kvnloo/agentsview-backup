@@ -547,13 +547,18 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 			setTestVersion(t, "test")
 			setStartProbeTickForTest(t, 10*time.Millisecond)
 			host, port := testPingServer(t)
-			written := make(chan error, 1)
-			go func() {
-				time.Sleep(30 * time.Millisecond)
-				_, err := WriteDaemonRuntime(dir, host, port, "test", false)
-				written <- err
-			}()
-			t.Cleanup(func() { require.NoError(t, <-written); RemoveDaemonRuntime(dir) })
+			original := listDaemonRuntimeRecords
+			published := false
+			listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
+				records, err := original(store)
+				if !published {
+					published = true
+					_, writeErr := WriteDaemonRuntime(dir, host, port, "test", false)
+					require.NoError(t, writeErr)
+				}
+				return records, err
+			}
+			t.Cleanup(func() { listDaemonRuntimeRecords = original; RemoveDaemonRuntime(dir) })
 			cfg := config.Config{DataDir: dir}
 			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 2*time.Second)
 			require.NoError(t, err)
@@ -581,6 +586,19 @@ func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
 	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, 1, starts)
+}
+
+func TestSavedNoDaemonAutostartArchiveWriteDoesNotWait(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+	forbidStartBackgroundServeForTransport(t, "saved policy must suppress daemon start")
+	cfg := config.Config{DataDir: dir}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportDirect, tr.Mode)
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {

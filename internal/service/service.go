@@ -24,13 +24,13 @@ var ErrSearchUnavailable = errors.New("search not available")
 // query Recall entries. Callers should treat services without this capability
 // as unsupported so retrieval surfaces are not advertised optimistically.
 type RecallQueryCapability interface {
-	SupportsRecallQueries(context.Context) bool
+	SupportsRecallQueries() bool
 }
 
 // SupportsRecallQueries reports whether svc can query Recall entries.
-func SupportsRecallQueries(ctx context.Context, svc SessionService) bool {
+func SupportsRecallQueries(svc SessionService) bool {
 	capability, ok := svc.(RecallQueryCapability)
-	return ok && capability.SupportsRecallQueries(ctx)
+	return ok && capability.SupportsRecallQueries()
 }
 
 // ErrAroundMutuallyExclusive is returned by Messages when Around is combined

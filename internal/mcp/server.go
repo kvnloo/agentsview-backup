@@ -113,7 +113,7 @@ type ServeOptions struct {
 
 // newServer builds an MCP server with the tools supported by its backing
 // service. Shared by the stdio and StreamableHTTP transports.
-func newServer(ctx context.Context, opts ServeOptions) *mcp.Server {
+func newServer(opts ServeOptions) *mcp.Server {
 	version := opts.Version
 	if version == "" {
 		version = "dev"
@@ -184,7 +184,7 @@ func newServer(ctx context.Context, opts ServeOptions) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
 
 	if !memoryOnly {
-		addFileReferencesTool(ctx, s, t, externalRead)
+		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
@@ -204,7 +204,7 @@ func newServer(ctx context.Context, opts ServeOptions) *mcp.Server {
 			Annotations: readOnly,
 		}, t.searchSessions)
 
-		if service.SupportsRecallQueries(ctx, opts.Service) {
+		if service.SupportsRecallQueries(opts.Service) {
 			mcp.AddTool(s, &mcp.Tool{Name: ToolListRecall, Description: "List distilled recall entries without a query. Lists bounded by updated_since or created_since return the oldest change first and include every status.", Annotations: readOnly}, t.listRecall)
 			mcp.AddTool(s, &mcp.Tool{
 				Name: ToolQueryRecall,
@@ -365,7 +365,7 @@ func newServer(ctx context.Context, opts ServeOptions) *mcp.Server {
 		}, searchDocs)
 	}
 
-	if !memoryOnly && service.SupportsFriction(ctx, opts.Service) {
+	if !memoryOnly && service.SupportsFriction(opts.Service) {
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolGetFrictionDigest,
 			Description: "Read one dated Friction Log digest. Includes heuristic findings (user corrections, " +
@@ -388,8 +388,8 @@ func newServer(ctx context.Context, opts ServeOptions) *mcp.Server {
 }
 
 // addFileReferencesTool advertises the Docbank lookup only when the backend has Docbank configured.
-func addFileReferencesTool(ctx context.Context, s *mcp.Server, t *toolset, readOnly *mcp.ToolAnnotations) {
-	if service.SupportsFileReferences(ctx, t.svc) {
+func addFileReferencesTool(s *mcp.Server, t *toolset, readOnly *mcp.ToolAnnotations) {
+	if service.SupportsFileReferences(t.svc) {
 		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact bytes of session files and images in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
 	}
 }
@@ -401,8 +401,8 @@ func addFileReferencesTool(ctx context.Context, s *mcp.Server, t *toolset, readO
 // which blocks a malicious web page from reaching a loopback MCP server
 // via DNS rebinding. withBearerAuth then adds token auth for non-loopback
 // binds (see the command layer).
-func newHTTPHandler(ctx context.Context, opts ServeOptions) http.Handler {
-	srv := newServer(ctx, opts)
+func newHTTPHandler(opts ServeOptions) http.Handler {
+	srv := newServer(opts)
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return srv }, nil)
 	return withBearerAuth(handler, opts.Token)
@@ -433,7 +433,7 @@ func withBearerAuth(next http.Handler, token string) http.Handler {
 // the normal end of life for a stdio server and return nil. Only an
 // unexpected transport failure is surfaced as an error.
 func ServeStdio(ctx context.Context, opts ServeOptions) error {
-	err := newServer(ctx, opts).Run(ctx, &mcp.StdioTransport{})
+	err := newServer(opts).Run(ctx, &mcp.StdioTransport{})
 	if isCleanStdioShutdown(err) {
 		return nil
 	}
@@ -479,7 +479,7 @@ func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) (result erro
 		}
 		defer func() { result = errors.Join(result, cleanup()) }()
 	}
-	httpServer := &http.Server{Addr: addr, Handler: newHTTPHandler(ctx, opts)}
+	httpServer := &http.Server{Addr: addr, Handler: newHTTPHandler(opts)}
 	fmt.Fprintf(os.Stderr, "agentsview mcp: serving on %s\n", addr)
 
 	errCh := make(chan error, 1)

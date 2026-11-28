@@ -23,7 +23,7 @@ import (
 func TestCallOutcomes(t *testing.T) {
 	dir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	for _, tc := range []struct {
 		name    string
@@ -105,7 +105,7 @@ broken
 func TestCallLogRejectedNames(t *testing.T) {
 	dir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	for _, args := range []map[string]any{
 		{"query": "unmatched-search"},
@@ -137,7 +137,7 @@ func TestCallLogWriteFailureWarnsOnce(t *testing.T) {
 	oldStderr := os.Stderr
 	os.Stderr = writer
 	t.Cleanup(func() { os.Stderr = oldStderr; _ = reader.Close(); _ = writer.Close() })
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: filepath.Join(dir, "calls")}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: filepath.Join(dir, "calls")}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	for range 2 {
 		result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
@@ -165,7 +165,7 @@ func TestRecordToolCallErrorOutcome(t *testing.T) {
 func TestCallLogArgumentNames(t *testing.T) {
 	dir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	longName := strings.Repeat("z", 70000)
 	args := map[string]any{"query": "private-value", "odd name!": "private-value", longName: true}
@@ -202,7 +202,7 @@ func TestCallLogListSessionsAndTruncatedMessages(t *testing.T) {
 	dbtest.SeedSession(t, d, "a", "project", dbtest.WithMessageCounts(4, 2))
 	dbtest.SeedSession(t, d, "b", "project", dbtest.WithMessageCounts(4, 2))
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("a", 0, strings.Repeat("x", 50))}))
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	page, err := ct.CallTool(t.Context(), callParams(ToolListSessions, map[string]any{"limit": 1}))
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestCallLogEmptyAndTruncated(t *testing.T) {
 	dir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
 	svc := &fakeContentSearchService{SessionService: service.NewDirectBackend(d, nil), result: &service.ContentSearchResult{CandidateTruncated: true}}
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: svc, CallLogDir: dir}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc, CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"pattern": "secret", "activity_cutoff": "bad-date"}))
 	require.NoError(t, err)
@@ -307,7 +307,7 @@ func TestCallLogKeepsOldAndPartialRecords(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, today+".jsonl"), []byte(`{"tool":`), 0o600))
 	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
 	require.NoError(t, err)

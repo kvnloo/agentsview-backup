@@ -859,19 +859,6 @@ commands that start a server on their own reports the lock holder the same way
 instead of launching a server that could not open the archive, while
 `daemon start` and `serve --background` report the child's failure as before.
 
-To disable daemon auto-start for every command and agent hook that uses a data
-directory, including agent sessions already running, set
-`no_daemon_autostart = true` in that directory's `config.toml`. Reads and
-`memory session-start --hook` then wait up to about two seconds for a server;
-direct write commands still use their local path. If a service manager runs
-`agentsview serve` in the foreground, whatever installs or updates the service
-should write the key before it stops the server, keep it across updates, and
-remove it when the service is retired.
-
-```toml
-no_daemon_autostart = true
-```
-
 ______________________________________________________________________
 
 <a id="agentsview-sync"></a>

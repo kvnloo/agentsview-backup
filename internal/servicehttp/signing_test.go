@@ -61,7 +61,7 @@ func TestSignedReaderDiscoversNonRecordingRecall(t *testing.T) {
 	backend := NewHTTPBackendForServer(ts.URL, "test", caps).(*httpBackend)
 	backend.client = ts.Client()
 	backend.longRunningClient = ts.Client()
-	assert.True(t, service.SupportsRecallQueries(t.Context(), backend))
+	assert.True(t, service.SupportsRecallQueries(backend))
 	assert.Empty(t, backend.sessionWebURL("claude:abc"), "signed machine listeners serve no browser UI")
 	_, err = backend.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "sample", Mode: "lexical"})
 	require.NoError(t, err)

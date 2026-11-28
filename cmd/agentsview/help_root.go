@@ -36,10 +36,9 @@ Where data comes from:
   configured PostgreSQL; these options are mutually exclusive. Remote auth uses
   --server-token-file or AGENTSVIEW_SERVER_TOKEN. These are command/group flags,
   not root flags. Read-only mirrors cannot refresh local provider sources.
-  AGENTSVIEW_NO_DAEMON=1, or no_daemon_autostart = true in config.toml,
-  prevents automatic startup and replacement. Ordinary local reads then need a
-  running daemon; explicit offline and maintenance commands retain their
-  documented local paths. Manage the writable daemon with:
+  AGENTSVIEW_NO_DAEMON=1 prevents automatic startup and replacement. Ordinary
+  local reads then need a running daemon; explicit offline and maintenance
+  commands retain their documented local paths. Manage the writable daemon with:
      agentsview daemon status
      agentsview daemon start
   source list reports built-in defaults and environment override names, not

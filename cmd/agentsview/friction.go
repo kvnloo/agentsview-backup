@@ -60,7 +60,7 @@ func resolveFrictionService(cmd *cobra.Command) (service.FrictionService, func()
 		return nil, nil, err
 	}
 	fs, ok := svc.(service.FrictionService)
-	if !ok || !service.SupportsFriction(cmd.Context(), svc) {
+	if !ok || !service.SupportsFriction(svc) {
 		cleanup()
 		return nil, nil, errors.New("this backend does not serve the Friction Log")
 	}

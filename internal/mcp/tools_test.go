@@ -1407,7 +1407,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	}
 	seedFTSSession(t, d, "s1", "proj", "unique end-to-end marker", "2024-01-01T10:00:00Z")
 
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
 		Now:     func() time.Time { return fixedNow },
 	})
@@ -1468,7 +1468,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	}))
 	defer server.Close()
 
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: servicehttp.NewHTTPBackend(server.URL, "", false, ""),
 		Now:     func() time.Time { return fixedNow },
 	})
@@ -2203,7 +2203,7 @@ func TestSearchSessions_DateRange(t *testing.T) {
 		})
 		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(f.id, 0, "datefilter message")}))
 	}
-	srv := newServer(t.Context(), ServeOptions{Service: ts.svc, Now: ts.now})
+	srv := newServer(ServeOptions{Service: ts.svc, Now: ts.now})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	for _, tc := range []struct {
@@ -2388,7 +2388,7 @@ func TestListSessionsRejectsUnknownMachine(t *testing.T) {
 func TestFileReferencesTool(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "s1", "proj")
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil, withTestDocbank())}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil, withTestDocbank())}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	res, err := ct.CallTool(t.Context(), callParams(ToolGetSessionFileReferences, map[string]any{"session_id": "s1"}))
 	require.NoError(t, err)
@@ -2413,7 +2413,7 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	httpServer.Start()
 	t.Cleanup(httpServer.Close)
 	svc := servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: svc}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	// Quotes keep the default search to the exact text instead of every
 	// message holding its words.
@@ -2451,7 +2451,7 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil)})
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)})
 	st, ct := newInMemoryPair(t, srv)
 	t.Cleanup(func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) })
 	res, err := ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z"}))
@@ -2778,7 +2778,7 @@ type deadlineContentService struct {
 	countErr  error
 }
 
-func (s *deadlineContentService) SupportsRecallQueries(_ context.Context) bool { return s.local }
+func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
 
 func (s *deadlineContentService) LocalContentScan() bool { return s.local }
 

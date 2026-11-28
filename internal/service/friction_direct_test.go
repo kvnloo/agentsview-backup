@@ -27,8 +27,8 @@ func seedServiceDigest(t *testing.T, d *db.DB, date string) {
 func TestDirectFrictionService(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	svc := service.NewDirectBackend(d, nil)
-	require.True(t, service.SupportsFriction(t.Context(), svc))
-	require.True(t, service.SupportsFriction(t.Context(), service.NewReadOnlyBackend(d)))
+	require.True(t, service.SupportsFriction(svc))
+	require.True(t, service.SupportsFriction(service.NewReadOnlyBackend(d)))
 	fs := svc.(service.FrictionService)
 
 	_, err := fs.FrictionDigest(t.Context(), "")

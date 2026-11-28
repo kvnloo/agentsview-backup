@@ -142,7 +142,7 @@ func TestGetChildSessions_ListsChildrenWithRelationship(t *testing.T) {
 		s.ParentSessionID = new("parent")
 		s.RelationshipType = "subagent"
 	})
-	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() {
 		require.NoError(t, ct.Close())
@@ -223,7 +223,7 @@ func TestCompareUsage_MapsBothSidesToOneDimension(t *testing.T) {
 // satisfy the advertised output schema.
 func TestServer_CompareUsageOnEmptyArchive(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() {
 		require.NoError(t, ct.Close())
@@ -261,11 +261,11 @@ func TestServer_NegotiatesProtocolPerTransport(t *testing.T) {
 	}
 	inMemory := func() mcp.Transport {
 		st, ct := mcp.NewInMemoryTransports()
-		_, err := newServer(t.Context(), opts).Connect(t.Context(), st, nil)
+		_, err := newServer(opts).Connect(t.Context(), st, nil)
 		require.NoError(t, err)
 		return ct
 	}
-	httpServer := httptest.NewServer(newHTTPHandler(t.Context(), opts))
+	httpServer := httptest.NewServer(newHTTPHandler(opts))
 	t.Cleanup(httpServer.Close)
 	overHTTP := func() mcp.Transport {
 		return &mcp.StreamableClientTransport{Endpoint: httpServer.URL, MaxRetries: -1}
@@ -785,7 +785,7 @@ func TestGetToolCalls_HTTPContinuesStoredResult(t *testing.T) {
 	httpServer.Config.Handler = srv.Handler()
 	httpServer.Start()
 	t.Cleanup(httpServer.Close)
-	ss, client := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}))
+	ss, client := newInMemoryPair(t, newServer(ServeOptions{Service: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}))
 	defer func() { require.NoError(t, client.Close()); require.NoError(t, ss.Wait()) }()
 	res, err := client.CallTool(t.Context(), callParams(ToolGetToolCalls, map[string]any{"session_id": "remote", "include_results": true, "max_result_chars": 4}))
 	require.NoError(t, err)

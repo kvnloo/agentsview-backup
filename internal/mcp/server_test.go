@@ -56,7 +56,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 
 func TestNewServer_RegistersReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil, withTestDocbank()),
 		Now:     func() time.Time { return fixedNow },
 	})
@@ -73,7 +73,7 @@ func TestNewServer_RegistersReadOnlyTools(t *testing.T) {
 
 func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
 		Profile: ProfileMemory,
 		Now:     func() time.Time { return fixedNow },
@@ -102,7 +102,7 @@ func TestNewServer_Instructions(t *testing.T) {
 	}{{"default", ""}, {"memory", ProfileMemory}} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
-			st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: tc.profile}))
+			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: tc.profile}))
 			defer func() {
 				require.NoError(t, ct.Close())
 				require.NoError(t, st.Wait())
@@ -176,7 +176,7 @@ func TestNewServer_Instructions(t *testing.T) {
 
 func TestServer_GetMemoryStatus(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
 		Version: "v-test",
 		Now:     func() time.Time { return fixedNow },
@@ -247,7 +247,7 @@ func TestNewServer_CatalogFitsBudget(t *testing.T) {
 	}{{ProfileFull, fullCatalogBudget}, {ProfileMemory, memoryCatalogBudget}} {
 		t.Run(string(tc.profile), func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
-			tools := listCatalog(t, newServer(t.Context(), ServeOptions{
+			tools := listCatalog(t, newServer(ServeOptions{
 				Service: service.NewDirectBackend(d, nil, withTestDocbank()),
 				Profile: tc.profile,
 			}))
@@ -289,7 +289,7 @@ func TestParseProfile(t *testing.T) {
 
 func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: service.NewReadOnlyBackend(d),
 		Now:     func() time.Time { return fixedNow },
 	})
@@ -319,7 +319,7 @@ func TestServer_SearchSessionsBySessionID(t *testing.T) {
 		})
 	}
 
-	srv := newServer(t.Context(), ServeOptions{
+	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
 		Now:     func() time.Time { return fixedNow },
 	})
@@ -385,7 +385,7 @@ func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
 	// Retry to exercise both the nil and the "server is closing" race
 	// outcomes; both must be recognized as clean.
 	for range 30 {
-		srv := newServer(t.Context(), ServeOptions{
+		srv := newServer(ServeOptions{
 			Service: service.NewDirectBackend(d, nil),
 			Now:     func() time.Time { return fixedNow },
 		})
@@ -441,7 +441,7 @@ func TestWithBearerAuth(t *testing.T) {
 func TestHTTPHandler_DNSRebindingProtection(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
-	ts := httptest.NewServer(newHTTPHandler(t.Context(), ServeOptions{
+	ts := httptest.NewServer(newHTTPHandler(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
 	}))
 	t.Cleanup(ts.Close)
@@ -498,7 +498,7 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 		_, _ = w.Write([]byte(`{"matches":[]}`))
 	}))
 	defer server.Close()
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: servicehttp.NewHTTPBackend(server.URL, "", false, "")}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: servicehttp.NewHTTPBackend(server.URL, "", false, "")}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	for _, value := range []bool{true, false} {
 		stale.Store(value)
@@ -519,7 +519,7 @@ func TestCompactionSummaryTool(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "codex:session", "project")
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:session", Role: "assistant", Content: "summary", IsSystem: true, IsCompactBoundary: true}}))
-	srv := newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	catalog, err := ct.ListTools(t.Context(), nil)
@@ -559,7 +559,7 @@ func TestServer_BudgetTextResults(t *testing.T) {
 		messages[i] = dbtest.AsstMsg("budget", i, "needle "+strings.Repeat("<&", 950))
 	}
 	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
-	st, ct := newInMemoryPair(t, newServer(t.Context(), ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	result, err := ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}))
 	require.NoError(t, err)

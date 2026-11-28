@@ -388,7 +388,7 @@ func holdExternalDaemonStartLock(t *testing.T, dataDir string) func() {
 		once.Do(func() {
 			_ = stdin.Close()
 			require.Eventually(t, func() bool {
-				return !isExternalDaemonStarting(t.Context(), dataDir)
+				return !isExternalDaemonStarting(context.WithoutCancel(t.Context()), dataDir)
 			}, 5*time.Second, 10*time.Millisecond,
 				"external daemon start lock should be released")
 		})
@@ -1172,7 +1172,7 @@ func TestDaemonDiscoveryRespectsDeadline(t *testing.T) {
 				_, _, err := waitForExternalServeStartup(ctx, dir, "", time.Second)
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			}
-			assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+			require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 			assert.Less(t, time.Since(started), 500*time.Millisecond)
 		})
 	}

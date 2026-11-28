@@ -167,9 +167,7 @@ func newHTTPBackend(
 	}
 }
 
-func (b *httpBackend) SupportsFileReferences(_ context.Context) bool {
-	return !b.signed && b.docbankEnabled
-}
+func (b *httpBackend) SupportsFileReferences() bool { return !b.signed && b.docbankEnabled }
 
 // ProbeHTTPServerCapabilities reads the metadata needed to expose tools safely
 // for an explicit daemon URL. Such callers do not have a local runtime record.
@@ -197,7 +195,7 @@ func probeHTTPServerCapabilities(ctx context.Context, api *apiclient.Client) (HT
 	return HTTPServerCapabilities{DocbankEnabled: response.JSON200.DocbankEnabled != nil && *response.JSON200.DocbankEnabled, ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion), NonRecordingRecall: response.HTTPResponse.Header.Get("X-Agentsview-Recall-Queries") == "non-recording", FrictionReadable: response.JSON200.FrictionReadable != nil && *response.JSON200.FrictionReadable}, nil
 }
 
-func (b *httpBackend) SupportsRecallQueries(_ context.Context) bool { return b.recallQueries }
+func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
 func (b *httpBackend) MemoryStatus(ctx context.Context) (service.MemoryStatus, error) {
 	api, err := b.apiClient(b.client)

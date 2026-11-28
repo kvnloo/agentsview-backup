@@ -19,7 +19,7 @@ func TestReaderCapabilityRegistersRecallTool(t *testing.T) {
 	defer ts.Close()
 	caps, err := servicehttp.ProbeHTTPServerCapabilities(t.Context(), ts.URL, "test")
 	require.NoError(t, err)
-	srv := newServer(t.Context(), ServeOptions{Service: servicehttp.NewHTTPBackendForServer(ts.URL, "test", caps)})
+	srv := newServer(ServeOptions{Service: servicehttp.NewHTTPBackendForServer(ts.URL, "test", caps)})
 	serverSession, clientSession := newInMemoryPair(t, srv)
 	tools, err := clientSession.ListTools(t.Context(), nil)
 	require.NoError(t, err)

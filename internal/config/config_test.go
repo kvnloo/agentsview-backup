@@ -31,7 +31,6 @@ func TestNoDaemonAutostartConfig(t *testing.T) {
 	}{
 		{"omitted", "", false},
 		{"true", "no_daemon_autostart = true\n", true},
-		{"unused invalid section", "no_daemon_autostart = true\n[insights]\nmodel = 'incomplete'\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

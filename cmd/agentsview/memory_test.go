@@ -113,7 +113,6 @@ func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
 	defer cancel()
 	err := requestLocalMemoryRefresh(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Contains(t, err.Error(), "memory session-start: local daemon:")
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

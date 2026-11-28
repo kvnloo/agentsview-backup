@@ -487,9 +487,11 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		intent transportIntent
+		reload bool
 	}{
-		{"read", transportIntentRead},
-		{"archive write", transportIntentArchiveWrite},
+		{"read", transportIntentRead, false},
+		{"archive write", transportIntentArchiveWrite, false},
+		{"reload after removal", transportIntentLongLived, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -511,6 +513,17 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, transportDirect, tr.Mode)
+			}
+			if tc.reload {
+				writeTestConfig(t, dir, "no_daemon_autostart = false\n")
+				var starts int
+				stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+					starts++
+					return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+				})
+				_, err := ensureTransportContext(t.Context(), &cfg, tc.intent, time.Second)
+				require.NoError(t, err)
+				assert.Equal(t, 1, starts)
 			}
 		})
 	}
@@ -586,26 +599,6 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSavedNoDaemonAutostartReloadsAfterRemoval(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	cfg, err := config.LoadReadOnlyAt(dir)
-	require.NoError(t, err)
-	forbidStartBackgroundServeForTransport(t, "saved policy must suppress daemon start")
-	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
-	require.NoError(t, err)
-	writeTestConfig(t, dir, "no_daemon_autostart = false\n")
-	var starts int
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-		starts++
-		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
-	})
-	_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, 1, starts)
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {
@@ -697,39 +690,33 @@ func TestEnsureTransport_ReplacesDifferentDaemonVersion(t *testing.T) {
 func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesOlderDaemon(
 	t *testing.T,
 ) {
-	dir := daemonRuntimeDir(t)
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
-
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	setTestVersion(t, "1.1.0")
-	forbidStartBackgroundServeForTransport(t,
-		"AGENTSVIEW_NO_DAEMON must suppress daemon replacement")
-
-	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransportContext(t.Context(),
-		&cfg, transportIntentRead, time.Second,
-	)
-
-	require.Error(t, err)
-	assert.Equal(t, transport{}, tr)
-	assert.Contains(t, err.Error(), "daemon restart required")
-	assert.Contains(t, err.Error(), "agentsview daemon restart")
-}
-
-func TestEnsureTransport_SavedPolicyGuidesManagedRestart(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
-	setTestVersion(t, "1.1.0")
-	forbidStartBackgroundServeForTransport(t, "managed service must own replacement")
-	cfg := config.Config{DataDir: dir}
-	_, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "restart the service")
-	assert.Contains(t, err.Error(), "if no service manager is in use")
+	for _, tc := range []struct {
+		name, env, config string
+	}{
+		{"environment", "1", ""},
+		{"saved setting", "", "no_daemon_autostart = true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := daemonRuntimeDir(t)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", tc.env)
+			if tc.config != "" {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				writeTestConfig(t, dir, tc.config)
+			}
+			host, port := testPingServer(t)
+			writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
+			setTestVersion(t, "1.1.0")
+			forbidStartBackgroundServeForTransport(t, "automatic replacement is disabled")
+			cfg := config.Config{DataDir: dir}
+			tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+			require.Error(t, err)
+			assert.Equal(t, transport{}, tr)
+			assert.Contains(t, err.Error(), "daemon restart required")
+			assert.Contains(t, err.Error(), "agentsview daemon restart")
+			assert.Contains(t, err.Error(), "restart the service")
+			assert.Contains(t, err.Error(), "if no service manager is in use")
+		})
+	}
 }
 
 func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDaemon(

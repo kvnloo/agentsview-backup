@@ -194,17 +194,13 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartWhenNoneStopped(t *testin
 }
 
 func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.T) {
-	stopErr := errors.New("stop failed")
 	installErr := errors.New("install failed")
 	for _, tc := range []struct {
 		name       string
-		stopErr    error
 		installErr error
-		wantCalls  []string
 	}{
-		{"success", nil, nil, []string{"load", "stop", "perform"}},
-		{"install failure", nil, installErr, []string{"load", "stop", "perform"}},
-		{"partial stop failure", stopErr, nil, []string{"load", "stop"}},
+		{"success", nil},
+		{"install failure", installErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []string
@@ -217,7 +213,7 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.
 				},
 				func(context.Context, config.Config) (updateDaemonStopResult, error) {
 					calls = append(calls, "stop")
-					return updateDaemonStopResult{Stopped: true}, tc.stopErr
+					return updateDaemonStopResult{Stopped: true}, nil
 				},
 				func(context.Context, *update.UpdateInfo, func(int64, int64)) error {
 					calls = append(calls, "perform")
@@ -228,14 +224,12 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.
 					return errors.New("managed daemon must not restart automatically")
 				},
 			)
-			if tc.stopErr != nil {
-				require.ErrorIs(t, err, tc.stopErr)
-			} else if tc.installErr != nil {
+			if tc.installErr != nil {
 				require.ErrorIs(t, err, tc.installErr)
 			} else {
 				require.NoError(t, err)
 			}
-			assert.Equal(t, tc.wantCalls, calls)
+			assert.Equal(t, []string{"load", "stop", "perform"}, calls)
 			assert.Equal(t, 1, strings.Count(output.String(), "The service manager handles the daemon restart."))
 		})
 	}

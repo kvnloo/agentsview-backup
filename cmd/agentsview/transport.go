@@ -254,29 +254,24 @@ func ensureTransportContext(
 	// invocation only, without touching the process environment.
 	invocationNoAutostart := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
 	var saved, savedLoaded bool
-	loadSaved := func() (bool, error) {
-		if !savedLoaded {
-			var err error
-			saved, err = config.LoadSavedNoDaemonAutostart(cfg.DataDir)
-			if err != nil {
-				return false, fmt.Errorf("loading daemon configuration: %w", err)
-			}
-			savedLoaded = true
+	loadSaved := func() (err error) {
+		saved, err = config.LoadSavedNoDaemonAutostart(cfg.DataDir)
+		savedLoaded = true
+		if err != nil {
+			return fmt.Errorf("loading daemon configuration: %w", err)
 		}
-		return saved, nil
+		return nil
 	}
 	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
-	managedWait := false
 	if allowReplacement && (intent == transportIntentRead || needWritable) && !invocationNoAutostart {
-		var err error
-		managedWait, err = loadSaved()
-		if err != nil {
+		if err := loadSaved(); err != nil {
 			return transport{}, err
 		}
 	}
+	managedWait := saved
 	if intent == transportIntentArchiveWrite && !managedWait {
 		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
 			ctx, cfg.DataDir, waitTimeout,
@@ -288,14 +283,12 @@ func ensureTransportContext(
 			adoptBackgroundLaunchConfig(cfg)
 		}
 	}
-	waitCtx := ctx
 	var tr transport
 	var err error
 	if managedWait {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, min(waitTimeout, 2*time.Second))
+		waitCtx, cancel := context.WithTimeout(ctx, min(waitTimeout, 2*time.Second))
 		defer cancel()
-		tr, err = waitForManagedDaemon(ctx, waitCtx, cfg, waitTimeout, needWritable)
+		tr, err = waitForManagedDaemon(waitCtx, cfg, waitTimeout, needWritable)
 	} else {
 		tr, err = detectTransportContext(
 			ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
@@ -304,19 +297,15 @@ func ensureTransportContext(
 	if err != nil {
 		return transport{}, err
 	}
-	if intent == transportIntentRead && cfg.AuthToken == "" &&
+	if !managedWait && intent == transportIntentRead && cfg.AuthToken == "" &&
 		tr.Mode == transportDirect && tr.DirectReadOnly {
 		adoptBackgroundLaunchConfig(cfg)
 		if cfg.AuthToken != "" {
 			tr, err = detectTransportContext(
-				waitCtx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 			)
 			if err != nil {
-				if managedWait && waitCtx.Err() != nil && ctx.Err() == nil {
-					tr = transport{}
-				} else {
-					return transport{}, err
-				}
+				return transport{}, err
 			}
 		}
 	}
@@ -324,7 +313,7 @@ func ensureTransportContext(
 		return transport{}, err
 	}
 	if !invocationNoAutostart && !savedLoaded && (tr.Mode != transportHTTP || (allowReplacement && shouldReplaceDaemonRuntime(tr.Runtime, version))) {
-		if _, err := loadSaved(); err != nil {
+		if err := loadSaved(); err != nil {
 			return transport{}, err
 		}
 	}
@@ -441,21 +430,19 @@ func ensureTransportContext(
 	return transportFromRuntime(rt), nil
 }
 
-func waitForManagedDaemon(ctx, waitCtx context.Context, cfg *config.Config, timeout time.Duration, needWritable bool) (transport, error) {
+func waitForManagedDaemon(ctx context.Context, cfg *config.Config, timeout time.Duration, needWritable bool) (transport, error) {
 	if needWritable {
-		_, err := waitForBackgroundLaunchBeforeArchiveWrite(waitCtx, cfg.DataDir, timeout)
-		if err != nil && !errors.Is(err, errServeStartupInProgress) && waitCtx.Err() == nil {
+		_, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, cfg.DataDir, timeout)
+		if err != nil && !errors.Is(err, errServeStartupInProgress) && ctx.Err() == nil {
 			return transport{}, err
 		}
 	}
-	var tr transport
-	for waitCtx.Err() == nil {
+	for ctx.Err() == nil {
 		if cfg.AuthToken == "" {
 			adoptBackgroundLaunchConfig(cfg)
 		}
-		var err error
-		tr, err = detectTransportContext(waitCtx, cfg.DataDir, cfg.AuthToken, timeout)
-		if err != nil && !errors.Is(err, errServeStartupInProgress) && waitCtx.Err() == nil {
+		tr, err := detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, timeout)
+		if err != nil && !errors.Is(err, errServeStartupInProgress) && ctx.Err() == nil {
 			return transport{}, err
 		}
 		if tr.DirectIncompatible || (tr.Mode == transportHTTP && (!needWritable || !tr.ReadOnly)) {
@@ -463,13 +450,10 @@ func waitForManagedDaemon(ctx, waitCtx context.Context, cfg *config.Config, time
 		}
 		timer := time.NewTimer(startProbeTick())
 		select {
-		case <-waitCtx.Done():
+		case <-ctx.Done():
 			timer.Stop()
 		case <-timer.C:
 		}
-	}
-	if err := ctx.Err(); err != nil {
-		return transport{}, err
 	}
 	return transport{}, nil
 }

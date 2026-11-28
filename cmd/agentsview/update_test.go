@@ -230,7 +230,10 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.
 				require.NoError(t, err)
 			}
 			assert.Equal(t, []string{"load", "stop", "perform"}, calls)
-			assert.Equal(t, 1, strings.Count(output.String(), "The service manager handles the daemon restart."))
+			assert.Equal(t, 1, strings.Count(output.String(), "daemon restart skipped"))
+			assert.Contains(t, output.String(), "service manager")
+			assert.Contains(t, output.String(), "agentsview daemon start")
+			assert.Contains(t, output.String(), "if no service manager is in use")
 		})
 	}
 }

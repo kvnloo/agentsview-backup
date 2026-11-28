@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/agenthook"
+	"go.kenn.io/kit/daemon"
 
 	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
@@ -103,16 +104,27 @@ func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
 	assert.Contains(t, stderr.String(), "remote unavailable")
 }
 
-func TestMemoryManagedDaemonWaitDeadline(t *testing.T) {
+func TestMemoryManagedDaemonRequiresWritable(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
 	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: an absent service must exhaust the caller's deadline.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
+	original := listDaemonRuntimeRecords
+	var probes int
+	listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
+		probes++
+		if probes == 2 {
+			cancel()
+		}
+		return original(store)
+	}
+	t.Cleanup(func() { listDaemonRuntimeRecords = original })
 	err := requestLocalMemoryRefresh(ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.GreaterOrEqual(t, probes, 2)
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

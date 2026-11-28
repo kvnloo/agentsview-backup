@@ -110,21 +110,23 @@ func TestMemoryManagedDaemonRequiresWritable(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
 	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	original := listDaemonRuntimeRecords
-	var probes int
-	listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
-		probes++
-		if probes == 2 {
+	var probes atomic.Int32
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if probes.Add(1) == 2 {
 			cancel()
 		}
-		return original(store)
-	}
-	t.Cleanup(func() { listDaemonRuntimeRecords = original })
+		ping.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, true)
 	err := requestLocalMemoryRefresh(ctx)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.GreaterOrEqual(t, probes, 2)
+	assert.GreaterOrEqual(t, probes.Load(), int32(2))
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

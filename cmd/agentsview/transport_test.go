@@ -485,13 +485,13 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 
 func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		intent transportIntent
-		reload bool
+		name    string
+		intent  transportIntent
+		stalled bool
 	}{
 		{"read", transportIntentRead, false},
 		{"archive write", transportIntentArchiveWrite, false},
-		{"reload after removal", transportIntentLongLived, true},
+		{"stalled daemon", transportIntentRead, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -500,6 +500,19 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 			forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
 			cfg, err := config.LoadReadOnlyAt(dir)
 			require.NoError(t, err)
+			if tc.stalled {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+				t.Cleanup(server.Close)
+				host, port := splitTestServerURL(t, server.URL)
+				writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
+				defer cancel()
+				started := time.Now()
+				_, err := ensureTransportContext(ctx, &cfg, tc.intent, time.Second)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.Less(t, time.Since(started), 500*time.Millisecond)
+				return
+			}
 			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the missing service must exhaust the read wait.
 			if tc.intent == transportIntentRead {
 				require.ErrorContains(t, err, "daemon autostart is disabled")
@@ -514,39 +527,24 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, transportDirect, tr.Mode)
 			}
-			if tc.reload {
-				writeTestConfig(t, dir, "no_daemon_autostart = false\n")
-				var starts int
-				stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-					starts++
-					return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
-				})
-				_, err := ensureTransportContext(t.Context(), &cfg, tc.intent, time.Second)
-				require.NoError(t, err)
-				assert.Equal(t, 1, starts)
-			}
 		})
 	}
-}
-
-func TestManagedDaemonWaitDeadline(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
-	writeTestConfig(t, dir, "no_daemon_autostart = true\n")
-	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	t.Cleanup(server.Close)
-	host, port := splitTestServerURL(t, server.URL)
-	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
-	cfg := config.Config{DataDir: dir}
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
-	defer cancel()
-	started := time.Now()
-	_, err := ensureTransportContext(ctx, &cfg, transportIntentRead, time.Second)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	t.Run("reload after removal", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+		writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+		cfg, err := config.LoadReadOnlyAt(dir)
+		require.NoError(t, err)
+		writeTestConfig(t, dir, "no_daemon_autostart = false\n")
+		var starts int
+		stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+			starts++
+			return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+		})
+		_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
+		require.NoError(t, err)
+		assert.Equal(t, 1, starts)
+	})
 }
 
 func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
@@ -575,15 +573,20 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 			} else {
 				host, port = testPingServer(t)
 			}
+			writable := tc.intent == transportIntentWritableDaemon
+			if writable {
+				_, err := WriteDaemonRuntimeWithAuth(dir, host, port, "test", "", true, tc.auth)
+				require.NoError(t, err)
+			}
 			original := listDaemonRuntimeRecords
-			published := false
+			var probes int
 			listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
 				records, err := original(store)
-				if !published {
-					published = true
-					if tc.auth {
-						writeTestConfig(t, dir, "no_daemon_autostart = true\nrequire_auth = true\nauth_token = 'generated-token'\n")
-					}
+				probes++
+				if tc.auth && probes == 1 {
+					writeTestConfig(t, dir, "no_daemon_autostart = true\nrequire_auth = true\nauth_token = 'generated-token'\n")
+				}
+				if (!writable && probes == 1) || (writable && probes == 2) {
 					_, writeErr := WriteDaemonRuntimeWithAuth(dir, host, port, "test", "", false, tc.auth)
 					require.NoError(t, writeErr)
 				}
@@ -594,6 +597,10 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 2*time.Second)
 			require.NoError(t, err)
 			assert.Equal(t, transportHTTP, tr.Mode)
+			if writable {
+				assert.False(t, tr.ReadOnly)
+				assert.GreaterOrEqual(t, probes, 2)
+			}
 			if tc.auth {
 				assert.Equal(t, "generated-token", cfg.AuthToken)
 			}

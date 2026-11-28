@@ -1987,6 +1987,8 @@ func TestEmbeddingsSwitchDoesNotStartStoppedManagedDaemon(t *testing.T) {
 	assert.Contains(t, err.Error(), "service")
 	assert.Contains(t, err.Error(), "no_daemon_autostart")
 	assert.Contains(t, err.Error(), "agentsview index embeddings build")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+	assert.NotContains(t, err.Error(), "agentsview daemon start")
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)

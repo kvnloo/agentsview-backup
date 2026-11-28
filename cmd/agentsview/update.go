@@ -174,7 +174,7 @@ func performUpdateWithDaemonLifecycle(ctx context.Context,
 	stopResult, err := stopDaemons(ctx, daemonCfg)
 	if err != nil {
 		if stopResult.Stopped {
-			if restartErr := restartDaemon(ctx, daemonCfg, stopResult); restartErr != nil {
+			if restartErr := restartUpdatedDaemon(ctx, daemonCfg, stopResult, restartDaemon); restartErr != nil {
 				return fmt.Errorf(
 					"stopping daemon before update: %w "+
 						"(also failed to restart daemon: %v)",
@@ -187,7 +187,7 @@ func performUpdateWithDaemonLifecycle(ctx context.Context,
 
 	if err := perform(ctx, info, progressFn); err != nil {
 		if stopResult.Stopped {
-			if restartErr := restartDaemon(ctx, daemonCfg, stopResult); restartErr != nil {
+			if restartErr := restartUpdatedDaemon(ctx, daemonCfg, stopResult, restartDaemon); restartErr != nil {
 				return fmt.Errorf(
 					"update failed: %w (also failed to restart daemon: %w)",
 					err, restartErr,
@@ -198,11 +198,19 @@ func performUpdateWithDaemonLifecycle(ctx context.Context,
 	}
 
 	if stopResult.Stopped {
-		if err := restartDaemon(ctx, daemonCfg, stopResult); err != nil {
+		if err := restartUpdatedDaemon(ctx, daemonCfg, stopResult, restartDaemon); err != nil {
 			return fmt.Errorf("restarting daemon after update: %w", err)
 		}
 	}
 	return nil
+}
+
+func restartUpdatedDaemon(ctx context.Context, cfg config.Config, result updateDaemonStopResult, restart func(context.Context, config.Config, updateDaemonStopResult) error) error {
+	if cfg.SavedNoDaemonAutostart {
+		fmt.Fprintln(daemonProgressWriter(ctx), "The service manager handles the daemon restart.")
+		return nil
+	}
+	return restart(ctx, cfg, result)
 }
 
 func loadDaemonConfigForUpdate() (config.Config, error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -190,6 +191,54 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartWhenNoneStopped(t *testin
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"load", "stop", "perform"}, calls)
+}
+
+func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.T) {
+	stopErr := errors.New("stop failed")
+	installErr := errors.New("install failed")
+	for _, tc := range []struct {
+		name       string
+		stopErr    error
+		installErr error
+		wantCalls  []string
+	}{
+		{"success", nil, nil, []string{"load", "stop", "perform"}},
+		{"install failure", nil, installErr, []string{"load", "stop", "perform"}},
+		{"partial stop failure", stopErr, nil, []string{"load", "stop"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			var output bytes.Buffer
+			ctx := context.WithValue(t.Context(), daemonProgressContextKey{}, &output)
+			err := performUpdateWithDaemonLifecycle(ctx, &update.UpdateInfo{}, nil,
+				func() (config.Config, error) {
+					calls = append(calls, "load")
+					return config.Config{DataDir: t.TempDir(), SavedNoDaemonAutostart: true}, nil
+				},
+				func(context.Context, config.Config) (updateDaemonStopResult, error) {
+					calls = append(calls, "stop")
+					return updateDaemonStopResult{Stopped: true}, tc.stopErr
+				},
+				func(context.Context, *update.UpdateInfo, func(int64, int64)) error {
+					calls = append(calls, "perform")
+					return tc.installErr
+				},
+				func(context.Context, config.Config, updateDaemonStopResult) error {
+					calls = append(calls, "restart")
+					return errors.New("managed daemon must not restart automatically")
+				},
+			)
+			if tc.stopErr != nil {
+				require.ErrorIs(t, err, tc.stopErr)
+			} else if tc.installErr != nil {
+				require.ErrorIs(t, err, tc.installErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantCalls, calls)
+			assert.Equal(t, 1, strings.Count(output.String(), "The service manager handles the daemon restart."))
+		})
+	}
 }
 
 func TestRestartDaemonAfterUpdateArgsPreserveRuntimeBind(t *testing.T) {

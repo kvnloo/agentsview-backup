@@ -77,7 +77,10 @@ and `doctor sync` can inspect the archive without starting it. If a script must
 never auto-start a daemon, set `AGENTSVIEW_NO_DAEMON=1`; commands that require
 one then refuse to run. To turn auto-start off for every command and agent hook
 that uses this data directory, including agent sessions already running, set
-`no_daemon_autostart = true` in `config.toml`.
+`no_daemon_autostart = true` in `config.toml`. If a service manager runs
+`agentsview serve`, its install or update step should write the key before it
+stops the service, keep it across updates, and remove it when the service is
+retired.
 
 For code attribution stats, the Cursor source performs a live, machine-local
 read from `~/.cursor/ai-tracking/ai-code-tracking.db` by default. If Cursor

@@ -173,7 +173,7 @@ func performUpdateWithDaemonLifecycle(ctx context.Context,
 	}
 	if daemonCfg.SavedNoDaemonAutostart {
 		restartDaemon = func(ctx context.Context, _ config.Config, _ updateDaemonStopResult) error {
-			fmt.Fprintln(daemonProgressWriter(ctx), "Automatic daemon restart skipped (no_daemon_autostart). Restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use.")
+			fmt.Fprintln(daemonProgressWriter(ctx), "Automatic daemon restart skipped: no_daemon_autostart is set.\nRestart the service, or run agentsview daemon start if no service manager is in use.")
 			return nil
 		}
 	}

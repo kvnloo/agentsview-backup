@@ -234,6 +234,8 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.
 			assert.Contains(t, output.String(), "service manager")
 			assert.Contains(t, output.String(), "agentsview daemon start")
 			assert.Contains(t, output.String(), "if no service manager is in use")
+			assert.NotContains(t, output.String(), "`")
+			assert.Len(t, strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n"), 2)
 		})
 	}
 }
